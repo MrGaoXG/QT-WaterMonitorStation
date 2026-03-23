@@ -1,0 +1,403 @@
+#include "SystemData.h"
+#include <QRandomGenerator>
+#include <QDebug>
+#include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QStringConverter>
+#include <QSerialPortInfo>
+
+SystemData::SystemData(QObject *parent) : QObject(parent),
+    m_phValue(7.40),
+    m_dissolvedOxygen(8.80),
+    m_turbidity(2.60),
+    m_droneRunning(false),
+    m_shipRunning(false),
+    m_temperature(26.5),
+    m_humidity(45.0),
+    m_windSpeed(3.2),
+    m_windDirection("东北 NE"),
+    m_hasAlarm(false),
+    m_alarmAcknowledged(false)
+{
+    // 初始化串口对象
+    m_serialPort = new QSerialPort(this);
+    connect(m_serialPort, &QSerialPort::readyRead, this, &SystemData::onReadyRead);
+
+    // 初始化遥测数据
+    m_droneTelemetry = {
+        {"battery", 100},
+        {"altitude", 0},
+        {"speed", 0},
+        {"signal", 100}
+    };
+    m_shipTelemetry = {
+        {"battery", 100},
+        {"speed", 0},
+        {"heading", 0},
+        {"signal", 100}
+    };
+
+    // 初始化空数据列表 (7个数据点)
+    for(int i=0; i<7; ++i) {
+        m_droneData.append(0);
+        m_shipData.append(0);
+    }
+
+    // 设置定时器模拟外部数据输入
+    // 在实际项目中，这里可能是初始化串口、建立 TCP 连接等
+    m_timer = new QTimer(this);
+    connect(m_timer, &QTimer::timeout, this, &SystemData::onSimulateDataUpdate);
+    m_timer->start(2000); // 连接定时器槽函数
+    connect(m_timer, &QTimer::timeout, this, &SystemData::onSimulateDataUpdate);
+    // m_timer->start(2000); // 现在由串口数据驱动，不使用定时器模拟数据了
+}
+
+SystemData::~SystemData()
+{
+    closeSerialPort();
+}
+
+bool SystemData::isSerialOpen() const
+{
+    return m_serialPort && m_serialPort->isOpen();
+}
+
+QString SystemData::currentPortName() const
+{
+    if (m_serialPort && m_serialPort->isOpen()) {
+        return m_serialPort->portName();
+    }
+    return "";
+}
+
+QStringList SystemData::getAvailablePorts()
+{
+    QStringList portList;
+    const auto infos = QSerialPortInfo::availablePorts();
+    for (const QSerialPortInfo &info : infos) {
+        portList << info.portName();
+    }
+    return portList;
+}
+
+bool SystemData::openSerialPort(const QString &portName, int baudRate)
+{
+    if (m_serialPort->isOpen()) {
+        m_serialPort->close();
+    }
+    
+    m_serialPort->setPortName(portName);
+    m_serialPort->setBaudRate(baudRate);
+    m_serialPort->setDataBits(QSerialPort::Data8);
+    m_serialPort->setParity(QSerialPort::NoParity);
+    m_serialPort->setStopBits(QSerialPort::OneStop);
+    m_serialPort->setFlowControl(QSerialPort::NoFlowControl);
+
+    // 以读写模式打开串口，才能发送指令
+    if (m_serialPort->open(QIODevice::ReadWrite)) {
+        emit logMessage(QString("串口 %1 已成功打开").arg(portName));
+        emit serialStatusChanged();
+        return true;
+    } else {
+        emit logMessage(QString("无法打开串口 %1: %2").arg(portName).arg(m_serialPort->errorString()));
+        emit serialStatusChanged();
+        return false;
+    }
+}
+
+void SystemData::closeSerialPort()
+{
+    if (m_serialPort->isOpen()) {
+        m_serialPort->close();
+        emit logMessage("串口已手动关闭");
+        emit serialStatusChanged();
+    }
+}
+
+void SystemData::sendCommand(const QString &device, const QString &action)
+{
+    if (!m_serialPort->isOpen()) {
+        emit logMessage(QString("发送失败：串口未打开"));
+        return;
+    }
+
+    QJsonObject jsonObj;
+    jsonObj[device] = action; // device为 "UVA" 或 "USV", action为 "start" 或 "close"
+
+    QJsonDocument doc(jsonObj);
+    QByteArray data = doc.toJson(QJsonDocument::Compact) + "\n"; // 压缩格式并追加换行符
+
+    qint64 bytesWritten = m_serialPort->write(data);
+    if (bytesWritten == -1) {
+        emit logMessage(QString("发送命令失败: %1").arg(m_serialPort->errorString()));
+    } else {
+        emit logMessage(QString("已发送控制命令: %1").arg(QString(data).trimmed()));
+    }
+}
+
+void SystemData::sendAlarmToSerial(const QString &msg)
+{
+    if (!m_serialPort->isOpen()) return;
+    
+    QJsonObject jsonObj;
+    jsonObj["ALARM"] = msg;
+    
+    QJsonDocument doc(jsonObj);
+    QByteArray data = doc.toJson(QJsonDocument::Compact) + "\n";
+    m_serialPort->write(data);
+    
+    // 我们还可以用红色字打印报警记录
+    emit logMessage(QString("<font color='red'>[警报已发送] %1</font>").arg(msg));
+}
+
+void SystemData::acknowledgeAlarm()
+{
+    m_alarmAcknowledged = true;
+    emit alarmStatusChanged();
+}
+
+void SystemData::checkAlarms()
+{
+    QStringList alarms;
+    
+    // 1. 水质报警条件
+    if (m_phValue < 6.0 || m_phValue > 9.0) alarms << QString("PH值异常 (%.1f)").arg(m_phValue);
+    if (m_dissolvedOxygen < 4.0) alarms << QString("溶解氧过低 (%.1f)").arg(m_dissolvedOxygen);
+    
+    // 2. 气象报警条件
+    if (m_windSpeed > 10.0) alarms << QString("风速过大 (%.1f m/s)").arg(m_windSpeed);
+    if (m_temperature > 40.0 || m_temperature < -10.0) alarms << QString("温度极端 (%.1f °C)").arg(m_temperature);
+    
+    // 3. 设备电量报警条件
+    if (m_droneTelemetry.value("battery").toInt() < 20) alarms << "无人机电量不足20%";
+    if (m_shipTelemetry.value("battery").toInt() < 20) alarms << "无人船电量不足20%";
+    
+    if (!alarms.isEmpty()) {
+        QString newAlarmMsg = alarms.join(" | ");
+        
+        // 只有当有新报警产生，或者之前的报警变了，才重新触发弹窗
+        if (!m_hasAlarm || m_currentAlarmMsg != newAlarmMsg) {
+            m_currentAlarmMsg = newAlarmMsg;
+            m_hasAlarm = true;
+            m_alarmAcknowledged = false; // 重置确认状态，强制弹出
+            emit alarmStatusChanged();
+            
+            // 自动向串口发送报警
+            sendAlarmToSerial(m_currentAlarmMsg);
+        }
+    } else {
+        // 如果所有值都恢复正常，自动解除报警状态
+        if (m_hasAlarm) {
+            m_hasAlarm = false;
+            m_alarmAcknowledged = false;
+            m_currentAlarmMsg = "";
+            emit alarmStatusChanged();
+            emit logMessage("<font color='#00FF00'>所有指标已恢复正常</font>");
+        }
+    }
+}
+
+void SystemData::onReadyRead()
+{
+    // 接收串口数据并存入缓存
+    m_serialBuffer.append(m_serialPort->readAll());
+
+    // 不再简单依赖 '\n' 作为单行分割，而是通过大括号匹配来寻找完整的 JSON 对象
+    // 这可以完美处理带有换行符的格式化 JSON 字符串
+    int braceCount = 0;
+    int startIndex = -1;
+    bool inString = false;
+    
+    for (int i = 0; i < m_serialBuffer.length(); ++i) {
+        char c = m_serialBuffer.at(i);
+        
+        // 处理字符串中的大括号（忽略它们）
+        if (c == '"' && (i == 0 || m_serialBuffer.at(i-1) != '\\')) {
+            inString = !inString;
+            continue;
+        }
+        
+        if (!inString) {
+            if (c == '{') {
+                if (braceCount == 0) {
+                    startIndex = i; // 记录 JSON 起始位置
+                }
+                braceCount++;
+            } else if (c == '}') {
+                braceCount--;
+                if (braceCount == 0 && startIndex != -1) {
+                    // 找到了一个完整的 JSON 对象
+                    QByteArray jsonStr = m_serialBuffer.mid(startIndex, i - startIndex + 1);
+                    
+                    // 将处理过的部分从缓存中移除 (包括它前面的无用字符)
+                    m_serialBuffer.remove(0, i + 1);
+                    
+                    // 重新从头开始找下一个 JSON (因为缓存长度改变了)
+                    i = -1; 
+                    startIndex = -1;
+                    
+                    // 开始解析这个完整的 JSON
+                    // 处理Windows串口助手发送的GBK编码中文字符
+                    QString jsonString = QString::fromLocal8Bit(jsonStr);
+                    QByteArray utf8Json = jsonString.toUtf8();
+                    
+                    QJsonParseError parseError;
+                    QJsonDocument jsonDoc = QJsonDocument::fromJson(utf8Json, &parseError);
+
+                    if (parseError.error == QJsonParseError::NoError && jsonDoc.isObject()) {
+                        QJsonObject jsonObj = jsonDoc.object();
+                        
+                        // 解析水质指标
+                        if (jsonObj.contains("ph")) {
+                            m_phValue = jsonObj["ph"].toDouble();
+                            emit phValueChanged();
+                        }
+                        if (jsonObj.contains("do")) {
+                            m_dissolvedOxygen = jsonObj["do"].toDouble();
+                            emit dissolvedOxygenChanged();
+                        }
+                        if (jsonObj.contains("turbidity")) {
+                            m_turbidity = jsonObj["turbidity"].toDouble();
+                            emit turbidityChanged();
+                        }
+                        
+                        // 解析环境气象数据
+                        if (jsonObj.contains("temperature")) {
+                            m_temperature = jsonObj["temperature"].toDouble();
+                            emit temperatureChanged();
+                        }
+                        if (jsonObj.contains("humidity")) {
+                            m_humidity = jsonObj["humidity"].toDouble();
+                            emit humidityChanged();
+                        }
+                        if (jsonObj.contains("windSpeed")) {
+                            m_windSpeed = jsonObj["windSpeed"].toDouble();
+                            emit windSpeedChanged();
+                        }
+                        if (jsonObj.contains("windDirection")) {
+                            m_windDirection = jsonObj["windDirection"].toString();
+                            emit windDirectionChanged();
+                        }
+                        
+                        // 解析无人机遥测数据
+                        if (jsonObj.contains("UVA_telemetry") && jsonObj["UVA_telemetry"].isObject()) {
+                            QJsonObject uvaObj = jsonObj["UVA_telemetry"].toObject();
+                            QVariantMap uvaMap = m_droneTelemetry;
+                            if (uvaObj.contains("battery")) uvaMap["battery"] = uvaObj["battery"].toInt();
+                            if (uvaObj.contains("altitude")) uvaMap["altitude"] = uvaObj["altitude"].toDouble();
+                            if (uvaObj.contains("speed")) uvaMap["speed"] = uvaObj["speed"].toDouble();
+                            if (uvaObj.contains("signal")) uvaMap["signal"] = uvaObj["signal"].toInt();
+                            m_droneTelemetry = uvaMap;
+                            emit droneTelemetryChanged();
+                        }
+                        
+                        // 解析无人船遥测数据
+                        if (jsonObj.contains("USV_telemetry") && jsonObj["USV_telemetry"].isObject()) {
+                            QJsonObject usvObj = jsonObj["USV_telemetry"].toObject();
+                            QVariantMap usvMap = m_shipTelemetry;
+                            if (usvObj.contains("battery")) usvMap["battery"] = usvObj["battery"].toInt();
+                            if (usvObj.contains("speed")) usvMap["speed"] = usvObj["speed"].toDouble();
+                            if (usvObj.contains("heading")) usvMap["heading"] = usvObj["heading"].toDouble();
+                            if (usvObj.contains("signal")) usvMap["signal"] = usvObj["signal"].toInt();
+                            m_shipTelemetry = usvMap;
+                            emit shipTelemetryChanged();
+                        }
+                        
+                        emit logMessage(QString("收到有效传感器/遥测数据"));
+                        
+                        // 每次收到新数据并解析完成后，检查是否需要报警
+                        checkAlarms();
+                        
+                    } else {
+                        emit logMessage(QString("JSON解析失败: %1").arg(QString(jsonStr).simplified()));
+                        qDebug() << "JSON parse error:" << parseError.errorString() << " Data:" << jsonStr;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void SystemData::setDroneRunning(bool running)
+{
+    if (m_droneRunning == running)
+        return;
+
+    m_droneRunning = running;
+    emit droneRunningChanged();
+
+    // 发送日志信号
+    QString status = running ? "启动" : "停止";
+    emit logMessage(QString("收到指令: 无人机巡检%1").arg(status));
+}
+
+void SystemData::setShipRunning(bool running)
+{
+    if (m_shipRunning == running)
+        return;
+
+    m_shipRunning = running;
+    emit shipRunningChanged();
+
+    // 发送日志信号
+    QString status = running ? "启动" : "停止";
+    emit logMessage(QString("收到指令: 无人船航行%1").arg(status));
+}
+
+void SystemData::onSimulateDataUpdate()
+{
+    // ============================================================
+    // TODO: 在这里替换为真实的外部数据读取代码
+    // 例如：
+    // serialPort->readAll();
+    // tcpSocket->readAll();
+    // ============================================================
+
+    // 只有在设备运行时才模拟数据变化
+    if (m_droneRunning) {
+        // 模拟 PH 值波动 (7.2 ~ 8.4)
+        double newVal = 7.2 + QRandomGenerator::global()->generateDouble() * 1.2;
+        // 保留两位小数
+        m_phValue = QString::number(newVal, 'f', 2).toDouble();
+        emit phValueChanged();
+
+        // 模拟无人机遥测数据变化
+        int currentBattery = m_droneTelemetry["battery"].toInt();
+        if (currentBattery > 0) {
+            m_droneTelemetry["battery"] = currentBattery - 1;
+        }
+        m_droneTelemetry["altitude"] = 120 + QRandomGenerator::global()->bounded(10); // 高度 120-130m
+        m_droneTelemetry["speed"] = 15 + QRandomGenerator::global()->bounded(5);      // 速度 15-20m/s
+        m_droneTelemetry["signal"] = 85 + QRandomGenerator::global()->bounded(15);    // 信号 85-100%
+        emit droneTelemetryChanged();
+
+        // 模拟无人机传感器数据
+        QVariantList newData;
+        for(int i=0; i<7; ++i) {
+            newData.append(QRandomGenerator::global()->bounded(100));
+        }
+        m_droneData = newData;
+        emit droneDataChanged();
+    }
+
+    if (m_shipRunning) {
+        // 模拟无人船遥测数据变化
+        int currentBattery = m_shipTelemetry["battery"].toInt();
+        if (currentBattery > 0) {
+            m_shipTelemetry["battery"] = currentBattery - 1;
+        }
+        m_shipTelemetry["speed"] = 5 + QRandomGenerator::global()->bounded(3);        // 速度 5-8kn
+        m_shipTelemetry["heading"] = QRandomGenerator::global()->bounded(360);        // 航向 0-359度
+        m_shipTelemetry["signal"] = 90 + QRandomGenerator::global()->bounded(10);     // 信号 90-100%
+        emit shipTelemetryChanged();
+
+        // 模拟无人船传感器数据
+        QVariantList newData;
+        for(int i=0; i<7; ++i) {
+            newData.append(QRandomGenerator::global()->bounded(100));
+        }
+        m_shipData = newData;
+        emit shipDataChanged();
+    }
+}

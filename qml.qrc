@@ -1,0 +1,17 @@
+<RCC>
+    <qresource prefix="/">
+        <file>main.qml</file>
+        <file>HudPanel.qml</file>
+        <file>TechBarChart.qml</file>
+        <file>background.png</file>
+        <file>DS-DIGIB-2.ttf</file>
+        <file>TechButton.qml</file>
+        <file>background2.png</file>
+        <file>background3.png</file>
+        <file>TechRadar.qml</file>
+        <file>TechPieChart.qml</file>
+        <file>Tech3DScene.qml</file>
+        <file>Tech25DScene.qml</file>
+        <file>dam_isometric.png</file>
+    </qresource>
+</RCC>

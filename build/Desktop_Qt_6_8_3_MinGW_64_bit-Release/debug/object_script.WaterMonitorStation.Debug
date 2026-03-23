@@ -1,0 +1,13 @@
+debug/main.o
+debug/SystemData.o
+debug/Tech25DScene_qml.o
+debug/TechRadar_qml.o
+debug/HudPanel_qml.o
+debug/TechButton_qml.o
+debug/TechPieChart_qml.o
+debug/TechBarChart_qml.o
+debug/Tech3DScene_qml.o
+debug/main_qml.o
+debug/qmlcache_loader.o
+debug/qrc_qml_qmlcache.o
+debug/moc_SystemData.o

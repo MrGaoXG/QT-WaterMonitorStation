@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<RCC>
+    <qresource prefix="/">
+        <file alias="main.qml">../../main.qml</file>
+        <file alias="HudPanel.qml">../../HudPanel.qml</file>
+        <file alias="TechBarChart.qml">../../TechBarChart.qml</file>
+        <file alias="background.png">../../background.png</file>
+        <file alias="DS-DIGIB-2.ttf">../../DS-DIGIB-2.ttf</file>
+        <file alias="TechButton.qml">../../TechButton.qml</file>
+        <file alias="background2.png">../../background2.png</file>
+        <file alias="background3.png">../../background3.png</file>
+        <file alias="TechRadar.qml">../../TechRadar.qml</file>
+        <file alias="TechPieChart.qml">../../TechPieChart.qml</file>
+        <file alias="Tech3DScene.qml">../../Tech3DScene.qml</file>
+        <file alias="Tech25DScene.qml">../../Tech25DScene.qml</file>
+        <file alias="dam_isometric.png">../../dam_isometric.png</file>
+    </qresource>
+</RCC>
