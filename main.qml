@@ -9,8 +9,29 @@ Window {
     width: 1920; height: 1080; visible: true; title: "水质监测地面站"
     color: "#020a0f"
     
+    // 设置全屏模式与窗口模式的动态切换逻辑
+    visibility: Window.FullScreen
+    flags: visibility === Window.FullScreen ? Qt.FramelessWindowHint : Qt.Window
+
+    // 快捷键支持：按 ESC 切换全屏/窗口模式
+    Shortcut {
+        sequence: "Esc"
+        onActivated: {
+            if (window.visibility === Window.FullScreen) {
+                window.visibility = Window.Windowed
+            } else {
+                window.visibility = Window.FullScreen
+            }
+        }
+    }
+    
     // 增加全局缩放比例，让字体和元素随窗口大小自适应
+    // 针对 7 寸屏（通常 800x480 或 1024x600）进行优化
     property real scaleRatio: Math.min(width / 1920, height / 1080)
+    
+    // 基础字体大小系数，确保在小屏幕下字体不会缩得太小
+    // 再次提升下限，针对 7 寸屏进行极度优化，设置为几乎不缩小
+    property real fontScale: Math.max(scaleRatio, 0.95) 
 
     // --- 核心交互逻辑与数据 ---
     // 监听 C++ 后端的日志信号
@@ -73,7 +94,7 @@ Window {
             Canvas {
                 anchors.fill: parent
                 property color primaryColor: systemData.hasAlarm ? "#FF0000" : "#00FFFF"
-                property color secondaryColor: systemData.hasAlarm ? "rgba(255, 0, 0, 0.4)" : "rgba(0, 255, 255, 0.4)"
+                property color secondaryColor: systemData.hasAlarm ? Qt.rgba(1, 0, 0, 0.4) : Qt.rgba(0, 1, 1, 0.4)
                 property color textColor: systemData.hasAlarm ? "#FF5555" : "#00A8FF"
                 
                 onPrimaryColorChanged: requestPaint()
@@ -127,15 +148,16 @@ Window {
             Text {
                 text: systemData.hasAlarm ? "水质监测地面站 - 警报模式" : "水质监测地面站"
                 anchors.centerIn: parent; anchors.verticalCenterOffset: -5
-                font.pixelSize: 42; font.bold: true; color: "#FFFFFF"; font.family: customFont.name
+                font.pixelSize: 48; font.bold: true; color: "#FFFFFF"; font.family: customFont.name // 42 -> 48
                 style: Text.Outline; styleColor: systemData.hasAlarm ? "#FF0000" : "#00A8FF" // 增加发光描边感
+                font.letterSpacing: 2
             }
             
             // 英文副标题
             Text {
                 text: "WATER QUALITY MONITORING SYSTEM"; anchors.top: parent.top; anchors.topMargin: 85
                 anchors.horizontalCenter: parent.horizontalCenter
-                font.pixelSize: 14; color: "#00A8FF"; font.family: customFont.name; font.letterSpacing: 5
+                font.pixelSize: 18; color: "#00A8FF"; font.family: customFont.name; font.letterSpacing: 5 // 16 -> 18
             }
 
             // 左侧状态装饰
@@ -145,19 +167,19 @@ Window {
                 RowLayout {
                     spacing: 8
                     Rectangle { 
-                        width: 12; height: 12; radius: 6; color: "#00FF00" 
+                        width: 14; height: 14; radius: 7; color: "#00FF00" // 12 -> 14
                         SequentialAnimation on opacity {
                             loops: Animation.Infinite
                             NumberAnimation { from: 1.0; to: 0.2; duration: 800 }
                             NumberAnimation { from: 0.2; to: 1.0; duration: 800 }
                         }
                     }
-                    Text { text: "SYSTEM ONLINE"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 18 }
+                    Text { text: "SYSTEM ONLINE"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 20 } // 18 -> 20
                 }
                 RowLayout {
                     spacing: 8
-                    Rectangle { width: 12; height: 12; radius: 6; color: "#00A8FF" }
-                    Text { text: "DATA LINK: SECURE"; color: "#00A8FF"; font.family: customFont.name; font.pixelSize: 18 }
+                    Rectangle { width: 14; height: 14; radius: 7; color: "#00A8FF" } // 12 -> 14
+                    Text { text: "DATA LINK: SECURE"; color: "#00A8FF"; font.family: customFont.name; font.pixelSize: 20 } // 18 -> 20
                 }
             }
 
@@ -168,23 +190,23 @@ Window {
                 
                 // 系统设置按钮
                 Rectangle {
-                    width: 40; height: 40; radius: 20
+                    width: 44; height: 44; radius: 22 // 40 -> 44
                     color: "transparent"; border.color: "#00A8FF"; border.width: 2
-                    Text { text: "⚙️"; anchors.centerIn: parent; font.pixelSize: 20 }
+                    Text { text: "⚙️"; anchors.centerIn: parent; font.pixelSize: 22 } // 20 -> 22
                     MouseArea {
                         anchors.fill: parent
                         hoverEnabled: true
-                        onEntered: parent.color = "rgba(0, 168, 255, 0.2)"
+                        onEntered: parent.color = Qt.rgba(0, 168/255, 1, 0.2)
                         onExited: parent.color = "transparent"
                         onClicked: settingPopup.visible = true
                     }
                 }
                 
                 Text {
-                    text: "LOCAL TIME"; color: "#00A8FF"; font.family: customFont.name; font.pixelSize: 16
+                    text: "LOCAL TIME"; color: "#00A8FF"; font.family: customFont.name; font.pixelSize: 18 // 16 -> 18
                 }
                 Text {
-                    color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 26; font.bold: true
+                    color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 28; font.bold: true // 26 -> 28
                     text: Qt.formatDateTime(new Date(), "yyyy-MM-dd HH:mm:ss")
                     Timer { interval: 1000; running: true; repeat: true; onTriggered: parent.text = Qt.formatDateTime(new Date(), "yyyy-MM-dd HH:mm:ss") }
                 }
@@ -232,17 +254,17 @@ Window {
                     // 上方：实时数据柱状图
                     ColumnLayout {
                         Layout.fillWidth: true; Layout.preferredHeight: parent.height * 0.4
-                        spacing: 15
+                        spacing: 20 // 15 -> 20
                         Repeater {
                             model: [ {name: "PH值", val: systemData.phValue/14, txt: systemData.phValue.toFixed(2)}, 
                                      {name: "溶解氧", val: systemData.dissolvedOxygen/10, txt: systemData.dissolvedOxygen.toFixed(2)}, 
                                      {name: "浊度", val: systemData.turbidity/10, txt: systemData.turbidity.toFixed(2)} ]
                             RowLayout {
-                                Layout.fillWidth: true; Text { text: modelData.name; color: "white"; font.family: customFont.name; Layout.preferredWidth: 60 }
-                                Rectangle { Layout.fillWidth: true; height: 12; color: "#2000FFFF"
+                                Layout.fillWidth: true; Text { text: modelData.name; color: "white"; font.family: customFont.name; Layout.preferredWidth: 120; font.pixelSize: 24 } // 100 -> 120, 22 -> 24
+                                Rectangle { Layout.fillWidth: true; height: 24; color: "#2000FFFF" // 20 -> 24
                                     Rectangle { width: parent.width * modelData.val; height: parent.height; color: systemData.phValue > 8 && index == 0 ? "red" : "#00FFFF"; Behavior on width { NumberAnimation{duration:1000} } }
                                 }
-                                Text { text: modelData.txt; color: "#00FFFF"; font.family: customFont.name; Layout.preferredWidth: 40 }
+                                Text { text: modelData.txt; color: "#00FFFF"; font.family: customFont.name; Layout.preferredWidth: 100; font.pixelSize: 24 } // 80 -> 100, 22 -> 24
                             }
                         }
                     }
@@ -253,9 +275,10 @@ Window {
                         title: "过去24小时趋势"
                         titleColor: "#00A8FF"
                         titleFont.family: customFont.name
-                        titleFont.pixelSize: 14
+                        titleFont.pixelSize: 22 // 18 -> 22
                         legend.visible: true
                         legend.labelColor: "white"
+                        legend.font.pixelSize: 16 // 14 -> 16
                         backgroundColor: "transparent"
                         plotAreaColor: Qt.rgba(0, 50/255, 50/255, 0.2)
                         antialiasing: true
@@ -267,6 +290,7 @@ Window {
                             tickCount: 7
                             labelFormat: "%d"
                             labelsColor: "#00A8FF"
+                            labelsFont.pixelSize: 16 // 14 -> 16
                             gridLineColor: Qt.rgba(0, 1.0, 1.0, 0.2)
                         }
 
@@ -275,6 +299,7 @@ Window {
                             min: 0; max: 40
                             tickCount: 5
                             labelsColor: "#00A8FF"
+                            labelsFont.pixelSize: 16 // 14 -> 16
                             gridLineColor: Qt.rgba(0, 1.0, 1.0, 0.2)
                         }
 
@@ -328,12 +353,15 @@ Window {
 
             HudPanel {
                 title: "系统实时日志"
-                Layout.fillWidth: true; Layout.preferredHeight: parent.height * 0.45 // 调小日志面板高度
+                Layout.fillWidth: true; Layout.preferredHeight: parent.height * 0.35 // 0.45 -> 0.35 压缩高度
                 ListView {
-                    anchors.fill: parent; model: logModel; clip: true; spacing: 5
+                    anchors.fill: parent; model: logModel; clip: true; spacing: 8 // 5 -> 8
                     delegate: Text {
-                        text: "[" + time + "] " + info; color: info.indexOf("报警") !== -1 ? "red" : "#00FFFF"
-                        font.family: customFont.name; font.pixelSize: 12
+                        width: parent.width
+                        text: "[" + time + "] " + info; color: info.indexOf("报警") !== -1 ? "#FF3333" : "#00FFFF"
+                        // 移除数字字体，使用标准字体提高清晰度，字号提升至 18px
+                        font.pixelSize: 18; font.bold: true
+                        wrapMode: Text.Wrap
                     }
                 }
                 ListModel { id: logModel }
@@ -345,20 +373,20 @@ Window {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 
                 GridLayout {
-                    anchors.fill: parent; anchors.margins: 10
-                    columns: 2; columnSpacing: 15; rowSpacing: 15
+                    anchors.centerIn: parent; width: parent.width * 0.95; anchors.verticalCenterOffset: 15 // 居中显示
+                    columns: 2; columnSpacing: 25; rowSpacing: 25 
                     
-                    Text { text: "温度 TEMP"; color: "#00A8FF"; font.pixelSize: 12 }
-                    Text { text: systemData.temperature.toFixed(1) + " °C"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 18; Layout.alignment: Qt.AlignRight }
+                    Text { text: "温度 TEMP"; color: "#00A8FF"; font.pixelSize: 20; font.bold: true } // 18 -> 20
+                    Text { text: systemData.temperature.toFixed(1) + " °C"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 32; Layout.alignment: Qt.AlignRight } // 28 -> 32
                     
-                    Text { text: "湿度 HUMID"; color: "#00A8FF"; font.pixelSize: 12 }
-                    Text { text: systemData.humidity.toFixed(1) + " %"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 18; Layout.alignment: Qt.AlignRight }
+                    Text { text: "湿度 HUMID"; color: "#00A8FF"; font.pixelSize: 20; font.bold: true } // 18 -> 20
+                    Text { text: systemData.humidity.toFixed(1) + " %"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 32; Layout.alignment: Qt.AlignRight } // 28 -> 32
                     
-                    Text { text: "风速 WIND"; color: "#00A8FF"; font.pixelSize: 12 }
-                    Text { text: systemData.windSpeed.toFixed(1) + " m/s"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 18; Layout.alignment: Qt.AlignRight }
+                    Text { text: "风速 WIND"; color: "#00A8FF"; font.pixelSize: 20; font.bold: true } // 18 -> 20
+                    Text { text: systemData.windSpeed.toFixed(1) + " m/s"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 32; Layout.alignment: Qt.AlignRight } // 28 -> 32
                     
-                    Text { text: "风向 DIR"; color: "#00A8FF"; font.pixelSize: 12 }
-                    Text { text: systemData.windDirection; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 18; Layout.alignment: Qt.AlignRight }
+                    Text { text: "风向 DIR"; color: "#00A8FF"; font.pixelSize: 20; font.bold: true } // 18 -> 20
+                    Text { text: systemData.windDirection; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 32; Layout.alignment: Qt.AlignRight } // 28 -> 32
                 }
             }
 
@@ -428,20 +456,65 @@ Window {
             }
         }
 
-        // --- 中心区域 (留白，展示背景图) ---
+        // --- 中心区域 (无人系统数据监测模块) ---
         Item {
+            id: centerArea
             anchors.left: leftPanel.right
             anchors.right: rightPanel.left
             anchors.top: parent.top
             anchors.bottom: bottomPanel.top
             anchors.margins: 20
+            
+            HudPanel {
+                title: "无人系统遥测监测 (Telemetry)"
+                width: parent.width * 0.9; height: 220 // 0.8 -> 0.9, 180 -> 220
+                anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottomMargin: 10
+                
+                RowLayout {
+                    anchors.fill: parent; anchors.margins: 20; spacing: 40 // 15 -> 20, 30 -> 40
+                    
+                    // 无人机遥测数据
+                    ColumnLayout {
+                        Layout.fillWidth: true; spacing: 15 // 10 -> 15
+                        Text { text: "● 无人机 (UAV)"; color: "#0088FF"; font.pixelSize: 24; font.bold: true } // 20 -> 24
+                        GridLayout {
+                            columns: 2; columnSpacing: 30; rowSpacing: 10 // 20 -> 30, 8 -> 10
+                            Text { text: "高度 ALT:"; color: "#00A8FF"; font.pixelSize: 20; Layout.preferredWidth: 120 } // 18 -> 20, 100 -> 120
+                            Text { text: systemData.droneTelemetry.altitude + " m"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 28 } // 24 -> 28
+                            Text { text: "速度 SPD:"; color: "#00A8FF"; font.pixelSize: 20 }
+                            Text { text: systemData.droneTelemetry.speed + " m/s"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 28 }
+                            Text { text: "信号 SIG:"; color: "#00A8FF"; font.pixelSize: 20 }
+                            Text { text: systemData.droneTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 28 }
+                        }
+                    }
+                    
+                    // 垂直分割线
+                    Rectangle { width: 2; Layout.fillHeight: true; color: Qt.rgba(0, 1, 1, 0.3) } // 1 -> 2
+                    
+                    // 无人船遥测数据
+                    ColumnLayout {
+                        Layout.fillWidth: true; spacing: 15
+                        Text { text: "● 无人船 (USV)"; color: "#FF3333"; font.pixelSize: 24; font.bold: true } // 20 -> 24
+                        GridLayout {
+                            columns: 2; columnSpacing: 30; rowSpacing: 10
+                            Text { text: "航速 SPD:"; color: "#00A8FF"; font.pixelSize: 20; Layout.preferredWidth: 120 } // 18 -> 20
+                            Text { text: systemData.shipTelemetry.speed + " kn"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 28 } // 24 -> 28
+                            Text { text: "航向 HDG:"; color: "#00A8FF"; font.pixelSize: 20 }
+                            Text { text: systemData.shipTelemetry.heading + " °"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 28 }
+                            Text { text: "通信 SIG:"; color: "#00A8FF"; font.pixelSize: 20 }
+                            Text { text: systemData.shipTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 28 }
+                        }
+                    }
+                }
+            }
         }
 
         // --- 底部控制台 (按钮位置已根据前次要求调整至红框处) ---
         RowLayout {
             id: bottomPanel
             anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter
-            width: parent.width * 0.52; height: parent.height * 0.35; spacing: 30
+            width: parent.width * 0.52; height: parent.height * 0.4; spacing: 30 // 0.35 -> 0.4 增加高度
             
             opacity: 0
             y: mainContent.height
@@ -473,7 +546,7 @@ Window {
                     RowLayout {
                         id: droneCtrlRow
                         anchors.top: parent.top; anchors.left: parent.left
-                        spacing: 10
+                        spacing: 15
                         TechButton {
                             text: systemData.droneRunning ? "停止" : "启动巡检"; active: systemData.droneRunning
                             onClicked: {
@@ -482,38 +555,20 @@ Window {
                                 systemData.sendCommand("UVA", action)
                                 msgPopup.display(systemData.droneRunning ? "指令确认：无人机起飞" : "指令确认：无人机降落")
                             }
+                            Layout.preferredWidth: 140; Layout.preferredHeight: 50 // 进一步增大按钮
                         }
-                        Text { text: "STATUS: " + (systemData.droneRunning ? "RUNNING" : "IDLE"); color: systemData.droneRunning ? "#00FF00" : "#666666"; font.family: customFont.name }
+                        Text { text: "STATUS: " + (systemData.droneRunning ? "RUNNING" : "IDLE"); color: systemData.droneRunning ? "#00FF00" : "#666666"; font.family: customFont.name; font.pixelSize: 22 } // 18 -> 22
                     }
                     
-                    // 右上：遥测参数显示
-                    Column {
-                        anchors.top: parent.top; anchors.right: parent.right; anchors.rightMargin: 5
-                        spacing: 4
-                        
-                        RowLayout {
-                            Text { text: "高度 ALT:"; color: "#00A8FF"; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                            Text { text: systemData.droneTelemetry.altitude + " m"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 14 }
-                        }
-                        RowLayout {
-                            Text { text: "速度 SPD:"; color: "#00A8FF"; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                            Text { text: systemData.droneTelemetry.speed + " m/s"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 14 }
-                        }
-                        RowLayout {
-                            Text { text: "信号 SIG:"; color: "#00A8FF"; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                            Text { text: systemData.droneTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 14 }
-                        }
-                    }
-                    
-                    // 中下：电量饼图居中
+                    // 居中：电量圆环 (遥测已移出)
                     Item {
                         anchors.top: droneCtrlRow.bottom; anchors.bottom: parent.bottom
                         anchors.left: parent.left; anchors.right: parent.right
-                        anchors.topMargin: 5
+                        anchors.topMargin: 10
                         
                         Item {
                             anchors.centerIn: parent
-                            height: parent.height
+                            height: parent.height * 1.05 // 缩小比例，从 1.3 -> 1.05
                             width: height
                             
                             Canvas {
@@ -522,21 +577,21 @@ Window {
                                 property real value: systemData.droneTelemetry.battery / 100
                                 onPaint: {
                                     var ctx = getContext("2d");
-                                    var cx = width / 2; var cy = height / 2; var r = Math.min(width, height) / 2 * 0.8;
+                                    var cx = width / 2; var cy = height / 2; var r = Math.min(width, height) / 2 * 0.85; // 0.88 -> 0.85
                                     ctx.clearRect(0, 0, width, height);
                                     
                                     ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-                                    ctx.lineWidth = 6; ctx.strokeStyle = "rgba(0, 255, 255, 0.1)"; ctx.stroke();
+                                    ctx.lineWidth = 10; ctx.strokeStyle = "rgba(0, 255, 255, 0.1)"; ctx.stroke(); // 12 -> 10
                                     
                                     ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI/2, -Math.PI/2 + value * 2 * Math.PI);
-                                    ctx.lineWidth = 6; ctx.strokeStyle = value < 0.2 ? "#FF3333" : "#00FFFF"; ctx.stroke();
+                                    ctx.lineWidth = 10; ctx.strokeStyle = value < 0.2 ? "#FF3333" : "#00FFFF"; ctx.stroke(); // 12 -> 10
                                 }
                                 onValueChanged: requestPaint()
                             }
                             Column {
                                 anchors.centerIn: parent
-                                Text { text: "电量"; color: "#00A8FF"; font.pixelSize: 10; anchors.horizontalCenter: parent.horizontalCenter }
-                                Text { text: systemData.droneTelemetry.battery + "%"; color: "white"; font.family: customFont.name; font.pixelSize: 14; anchors.horizontalCenter: parent.horizontalCenter }
+                                Text { text: "电池电量"; color: "#00A8FF"; font.pixelSize: 18; anchors.horizontalCenter: parent.horizontalCenter; font.bold: true } // 24 -> 18
+                                Text { text: systemData.droneTelemetry.battery + "%"; color: "white"; font.family: customFont.name; font.pixelSize: 32; anchors.horizontalCenter: parent.horizontalCenter } // 42 -> 32
                             }
                         }
                     }
@@ -553,7 +608,7 @@ Window {
                     RowLayout {
                         id: shipCtrlRow
                         anchors.top: parent.top; anchors.left: parent.left
-                        spacing: 10
+                        spacing: 15
                         TechButton {
                             text: systemData.shipRunning ? "停止" : "开启航行"; active: systemData.shipRunning
                             onClicked: {
@@ -562,38 +617,20 @@ Window {
                                 systemData.sendCommand("USV", action)
                                 msgPopup.display(systemData.shipRunning ? "指令确认：推进器已开启" : "指令确认：已切断动力")
                             }
+                            Layout.preferredWidth: 140; Layout.preferredHeight: 50 // 进一步增大按钮
                         }
-                        Text { text: "STATUS: " + (systemData.shipRunning ? "SAILING" : "DOCKED"); color: systemData.shipRunning ? "#00FF00" : "#666666"; font.family: customFont.name }
+                        Text { text: "STATUS: " + (systemData.shipRunning ? "SAILING" : "DOCKED"); color: systemData.shipRunning ? "#00FF00" : "#666666"; font.family: customFont.name; font.pixelSize: 22 } // 18 -> 22
                     }
                     
-                    // 右上：遥测参数显示
-                    Column {
-                        anchors.top: parent.top; anchors.right: parent.right; anchors.rightMargin: 5
-                        spacing: 4
-                        
-                        RowLayout {
-                            Text { text: "航速 SPD:"; color: "#00A8FF"; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                            Text { text: systemData.shipTelemetry.speed + " kn"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 14 }
-                        }
-                        RowLayout {
-                            Text { text: "航向 HDG:"; color: "#00A8FF"; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                            Text { text: systemData.shipTelemetry.heading + " °"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 14 }
-                        }
-                        RowLayout {
-                            Text { text: "通信 SIG:"; color: "#00A8FF"; font.pixelSize: 12; Layout.preferredWidth: 60 }
-                            Text { text: systemData.shipTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 14 }
-                        }
-                    }
-                    
-                    // 中下：电量饼图居中
+                    // 居中：电量圆环 (遥测已移出)
                     Item {
                         anchors.top: shipCtrlRow.bottom; anchors.bottom: parent.bottom
                         anchors.left: parent.left; anchors.right: parent.right
-                        anchors.topMargin: 5
+                        anchors.topMargin: 10
                         
                         Item {
                             anchors.centerIn: parent
-                            height: parent.height
+                            height: parent.height * 1.05 // 缩小比例，从 1.3 -> 1.05
                             width: height
                             
                             Canvas {
@@ -602,21 +639,21 @@ Window {
                                 property real value: systemData.shipTelemetry.battery / 100
                                 onPaint: {
                                     var ctx = getContext("2d");
-                                    var cx = width / 2; var cy = height / 2; var r = Math.min(width, height) / 2 * 0.8;
+                                    var cx = width / 2; var cy = height / 2; var r = Math.min(width, height) / 2 * 0.85; // 0.88 -> 0.85
                                     ctx.clearRect(0, 0, width, height);
                                     
                                     ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-                                    ctx.lineWidth = 6; ctx.strokeStyle = "rgba(0, 255, 255, 0.1)"; ctx.stroke();
+                                    ctx.lineWidth = 10; ctx.strokeStyle = "rgba(0, 255, 255, 0.1)"; ctx.stroke(); // 12 -> 10
                                     
                                     ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI/2, -Math.PI/2 + value * 2 * Math.PI);
-                                    ctx.lineWidth = 6; ctx.strokeStyle = value < 0.2 ? "#FF3333" : "#00FFFF"; ctx.stroke();
+                                    ctx.lineWidth = 10; ctx.strokeStyle = value < 0.2 ? "#FF3333" : "#00FFFF"; ctx.stroke(); // 12 -> 10
                                 }
                                 onValueChanged: requestPaint()
                             }
                             Column {
                                 anchors.centerIn: parent
-                                Text { text: "电量"; color: "#00A8FF"; font.pixelSize: 10; anchors.horizontalCenter: parent.horizontalCenter }
-                                Text { text: systemData.shipTelemetry.battery + "%"; color: "white"; font.family: customFont.name; font.pixelSize: 14; anchors.horizontalCenter: parent.horizontalCenter }
+                                Text { text: "电池电量"; color: "#00A8FF"; font.pixelSize: 18; anchors.horizontalCenter: parent.horizontalCenter; font.bold: true } // 24 -> 18
+                                Text { text: systemData.shipTelemetry.battery + "%"; color: "white"; font.family: customFont.name; font.pixelSize: 32; anchors.horizontalCenter: parent.horizontalCenter } // 42 -> 32
                             }
                         }
                     }
@@ -642,6 +679,7 @@ Window {
 
             function display(txt) {
                 msgText.text = txt
+                msgText.font.pixelSize = 24 // 增大弹窗字号
                 centerAnim.start()
             }
 
@@ -683,28 +721,21 @@ Window {
                 
                 RowLayout {
                     spacing: 15
-                    Text { text: "⚠️"; color: "red"; font.pixelSize: 40 }
-                    Text { text: "系统严重报警"; color: "white"; font.family: customFont.name; font.pixelSize: 32; font.bold: true }
-                    Text { text: "⚠️"; color: "red"; font.pixelSize: 40 }
+                    Text { text: "⚠️"; color: "red"; font.pixelSize: 50 } // 40 -> 50
+                    Text { text: "系统严重报警"; color: "white"; font.family: customFont.name; font.pixelSize: 36; font.bold: true } // 32 -> 36
+                    Text { text: "⚠️"; color: "red"; font.pixelSize: 50 } // 40 -> 50
                 }
                 
                 Text {
                     text: systemData.currentAlarmMsg
-                    color: "#FF5555"; font.family: customFont.name; font.pixelSize: 20
+                    color: "#FF5555"; font.family: customFont.name; font.pixelSize: 24 // 20 -> 24
                     Layout.alignment: Qt.AlignHCenter
                 }
                 
-                // 确认并关闭按钮
-                Rectangle {
-                    width: 150; height: 40; radius: 5; color: "#FF0000"
+                TechButton {
+                    text: "确 认"; Layout.preferredWidth: 150; Layout.preferredHeight: 50 // 增大确认按钮
+                    onClicked: systemData.acknowledgeAlarm()
                     Layout.alignment: Qt.AlignHCenter
-                    Text { text: "确认并关闭"; color: "white"; font.family: customFont.name; font.pixelSize: 18; anchors.centerIn: parent; font.bold: true }
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
-                            systemData.acknowledgeAlarm()
-                        }
-                    }
                 }
             }
         }
@@ -712,7 +743,7 @@ Window {
         // 7. 系统设置面板 (弹出式)
         Rectangle {
             id: settingPopup
-            width: 400; height: 300; radius: 10
+            width: 500; height: 400; radius: 10 // 400x300 -> 500x400
             color: Qt.rgba(0, 30/255, 40/255, 0.95); border.color: "#00A8FF"; border.width: 2
             anchors.centerIn: parent
             visible: false
@@ -720,12 +751,12 @@ Window {
             
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 20
-                spacing: 15
+                spacing: 20 // 15 -> 20
                 
                 // 标题栏
                 RowLayout {
                     Layout.fillWidth: true
-                    Text { text: "⚙ 系统配置"; color: "#00FFFF"; font.pixelSize: 22; font.bold: true }
+                    Text { text: "⚙ 系统配置"; color: "#00FFFF"; font.pixelSize: 28; font.bold: true } // 22 -> 28
                     Item { Layout.fillWidth: true } // 占位
                     Text { 
                         text: "✖"; color: "white"; font.pixelSize: 20 

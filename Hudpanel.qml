@@ -33,7 +33,7 @@ Item {
             x: 15; y: 8
             color: bg.decoColor
             font.family: customFont.name
-            font.pixelSize: 14; font.bold: true
+            font.pixelSize: 20; font.bold: true // 16 -> 20
         }
 
         Item {

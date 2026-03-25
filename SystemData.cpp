@@ -164,14 +164,18 @@ void SystemData::checkAlarms()
     // 1. 水质报警条件
     if (m_phValue < 6.0 || m_phValue > 9.0) alarms << QString("PH值异常 (%.1f)").arg(m_phValue);
     if (m_dissolvedOxygen < 4.0) alarms << QString("溶解氧过低 (%.1f)").arg(m_dissolvedOxygen);
+    if (m_turbidity > 5.0) alarms << QString("浊度过高 (%.1f)").arg(m_turbidity); // 新增浊度报警
     
     // 2. 气象报警条件
     if (m_windSpeed > 10.0) alarms << QString("风速过大 (%.1f m/s)").arg(m_windSpeed);
     if (m_temperature > 40.0 || m_temperature < -10.0) alarms << QString("温度极端 (%.1f °C)").arg(m_temperature);
     
     // 3. 设备电量报警条件
-    if (m_droneTelemetry.value("battery").toInt() < 20) alarms << "无人机电量不足20%";
-    if (m_shipTelemetry.value("battery").toInt() < 20) alarms << "无人船电量不足20%";
+    int droneBat = m_droneTelemetry.value("battery").toInt();
+    int shipBat = m_shipTelemetry.value("battery").toInt();
+    
+    if (droneBat > 0 && droneBat < 20) alarms << QString("无人机电量低 (%1%)").arg(droneBat);
+    if (shipBat > 0 && shipBat < 20) alarms << QString("无人船电量低 (%1%)").arg(shipBat);
     
     if (!alarms.isEmpty()) {
         QString newAlarmMsg = alarms.join(" | ");
@@ -248,7 +252,7 @@ void SystemData::onReadyRead()
                     if (parseError.error == QJsonParseError::NoError && jsonDoc.isObject()) {
                         QJsonObject jsonObj = jsonDoc.object();
                         
-                        // 解析水质指标
+                        // 解析水质指标 (支持长短键名)
                         if (jsonObj.contains("ph")) {
                             m_phValue = jsonObj["ph"].toDouble();
                             emit phValueChanged();
@@ -257,49 +261,67 @@ void SystemData::onReadyRead()
                             m_dissolvedOxygen = jsonObj["do"].toDouble();
                             emit dissolvedOxygenChanged();
                         }
-                        if (jsonObj.contains("turbidity")) {
-                            m_turbidity = jsonObj["turbidity"].toDouble();
+                        if (jsonObj.contains("turbidity") || jsonObj.contains("turb")) {
+                            m_turbidity = jsonObj.contains("turbidity") ? jsonObj["turbidity"].toDouble() : jsonObj["turb"].toDouble();
                             emit turbidityChanged();
                         }
                         
                         // 解析环境气象数据
-                        if (jsonObj.contains("temperature")) {
-                            m_temperature = jsonObj["temperature"].toDouble();
+                        if (jsonObj.contains("temperature") || jsonObj.contains("temp")) {
+                            m_temperature = jsonObj.contains("temperature") ? jsonObj["temperature"].toDouble() : jsonObj["temp"].toDouble();
                             emit temperatureChanged();
                         }
-                        if (jsonObj.contains("humidity")) {
-                            m_humidity = jsonObj["humidity"].toDouble();
+                        if (jsonObj.contains("humidity") || jsonObj.contains("hum")) {
+                            m_humidity = jsonObj.contains("humidity") ? jsonObj["humidity"].toDouble() : jsonObj["hum"].toDouble();
                             emit humidityChanged();
                         }
-                        if (jsonObj.contains("windSpeed")) {
-                            m_windSpeed = jsonObj["windSpeed"].toDouble();
+                        if (jsonObj.contains("windSpeed") || jsonObj.contains("ws")) {
+                            m_windSpeed = jsonObj.contains("windSpeed") ? jsonObj["windSpeed"].toDouble() : jsonObj["ws"].toDouble();
                             emit windSpeedChanged();
                         }
-                        if (jsonObj.contains("windDirection")) {
-                            m_windDirection = jsonObj["windDirection"].toString();
+                        if (jsonObj.contains("windDirection") || jsonObj.contains("wd")) {
+                            m_windDirection = jsonObj.contains("windDirection") ? jsonObj["windDirection"].toString() : jsonObj["wd"].toString();
                             emit windDirectionChanged();
                         }
                         
-                        // 解析无人机遥测数据
-                        if (jsonObj.contains("UVA_telemetry") && jsonObj["UVA_telemetry"].isObject()) {
-                            QJsonObject uvaObj = jsonObj["UVA_telemetry"].toObject();
+                        // 解析无人机遥测数据 (兼容 UVA_telemetry 和 drone)
+                        QString droneKey = jsonObj.contains("UVA_telemetry") ? "UVA_telemetry" : (jsonObj.contains("drone") ? "drone" : "");
+                        if (!droneKey.isEmpty() && jsonObj[droneKey].isObject()) {
+                            QJsonObject uvaObj = jsonObj[droneKey].toObject();
                             QVariantMap uvaMap = m_droneTelemetry;
                             if (uvaObj.contains("battery")) uvaMap["battery"] = uvaObj["battery"].toInt();
+                            else if (uvaObj.contains("bat")) uvaMap["battery"] = uvaObj["bat"].toInt();
+                            
                             if (uvaObj.contains("altitude")) uvaMap["altitude"] = uvaObj["altitude"].toDouble();
+                            else if (uvaObj.contains("alt")) uvaMap["altitude"] = uvaObj["alt"].toDouble();
+                            
                             if (uvaObj.contains("speed")) uvaMap["speed"] = uvaObj["speed"].toDouble();
+                            else if (uvaObj.contains("spd")) uvaMap["speed"] = uvaObj["spd"].toDouble();
+                            
                             if (uvaObj.contains("signal")) uvaMap["signal"] = uvaObj["signal"].toInt();
+                            else if (uvaObj.contains("sig")) uvaMap["signal"] = uvaObj["sig"].toInt();
+                            
                             m_droneTelemetry = uvaMap;
                             emit droneTelemetryChanged();
                         }
                         
-                        // 解析无人船遥测数据
-                        if (jsonObj.contains("USV_telemetry") && jsonObj["USV_telemetry"].isObject()) {
-                            QJsonObject usvObj = jsonObj["USV_telemetry"].toObject();
+                        // 解析无人船遥测数据 (兼容 USV_telemetry 和 ship)
+                        QString shipKey = jsonObj.contains("USV_telemetry") ? "USV_telemetry" : (jsonObj.contains("ship") ? "ship" : "");
+                        if (!shipKey.isEmpty() && jsonObj[shipKey].isObject()) {
+                            QJsonObject usvObj = jsonObj[shipKey].toObject();
                             QVariantMap usvMap = m_shipTelemetry;
                             if (usvObj.contains("battery")) usvMap["battery"] = usvObj["battery"].toInt();
+                            else if (usvObj.contains("bat")) usvMap["battery"] = usvObj["bat"].toInt();
+                            
                             if (usvObj.contains("speed")) usvMap["speed"] = usvObj["speed"].toDouble();
+                            else if (usvObj.contains("spd")) usvMap["speed"] = usvObj["spd"].toDouble();
+                            
                             if (usvObj.contains("heading")) usvMap["heading"] = usvObj["heading"].toDouble();
+                            else if (usvObj.contains("hdg")) usvMap["heading"] = usvObj["hdg"].toDouble();
+                            
                             if (usvObj.contains("signal")) usvMap["signal"] = usvObj["signal"].toInt();
+                            else if (usvObj.contains("sig")) usvMap["signal"] = usvObj["sig"].toInt();
+                            
                             m_shipTelemetry = usvMap;
                             emit shipTelemetryChanged();
                         }

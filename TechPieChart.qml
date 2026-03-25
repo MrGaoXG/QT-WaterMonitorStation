@@ -95,36 +95,33 @@ Item {
                 ctx.stroke();
                 ctx.setLineDash([]); 
                 
+                // 增加标签字体大小
+                ctx.fillStyle = slices[j].color;
+                ctx.font = "bold 18px " + (typeof customFont !== 'undefined' ? customFont.name : "Arial"); // 14px -> 18px
+                ctx.textAlign = textAlign;
+                ctx.fillText(slices[j].label + ": " + slices[j].value + "%", endX, turnY - 8);
+                
                 ctx.beginPath();
-                ctx.arc(endX, turnY, 2, 0, 2 * Math.PI);
+                ctx.arc(endX, turnY, 3, 0, 2 * Math.PI); // 2 -> 3
                 ctx.fillStyle = slices[j].color;
                 ctx.fill();
 
-                ctx.fillStyle = slices[j].color;
-                ctx.font = "12px sans-serif";
-                ctx.textAlign = textAlign;
-                ctx.textBaseline = "middle";
-                
-                var labelText = slices[j].label + " " + Math.round((slices[j].value / total) * 100) + "%";
-                var textX = textAlign === "left" ? endX + 5 : endX - 5;
-                ctx.fillText(labelText, textX, turnY);
-
-                startAngle = endAngle;
+                startAngle = endAngle; // 确保 startAngle 在循环末尾更新
             }
-
+            
             // --- 3. 绘制中心空心遮罩（甜甜圈效果） ---
             ctx.beginPath();
             ctx.arc(cx, cy, radius * 0.55, 0, 2 * Math.PI);
             ctx.fillStyle = "#020a0f";
             ctx.fill();
 
-            // --- 4. 中心文字 (固定不旋转) ---
+            // --- 4. 中心文字 ---
             ctx.fillStyle = "#00FFFF";
-            ctx.font = "bold 14px sans-serif";
+            ctx.font = "bold 24px sans-serif"; // 20px -> 24px
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
-            ctx.fillText("WATER", cx, cy - 10);
-            ctx.fillText("DATA", cx, cy + 10);
+            ctx.fillText("水质", cx, cy - 14);
+            ctx.fillText("分析", cx, cy + 14);
         }
     }
 
