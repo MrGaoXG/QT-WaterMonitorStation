@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QVariantList>
 #include <QSerialPort>
+#include <QUdpSocket>
 
 /**
  * @brief SystemData 类是 QML 和 C++ 后端之间的桥梁。
@@ -74,6 +75,10 @@ public:
     // 提供给QML调用，用于发送JSON指令
     Q_INVOKABLE void sendCommand(const QString &device, const QString &action);
     
+    // 提供给QML调用，用于打开UDP监听
+    Q_INVOKABLE bool openUdpPort(int port = 8080);
+    Q_INVOKABLE void closeUdpPort();
+    
     // 确认报警已读
     Q_INVOKABLE void acknowledgeAlarm();
 
@@ -87,9 +92,11 @@ public:
     Q_PROPERTY(bool hasAlarm READ hasAlarm NOTIFY alarmStatusChanged)
     Q_PROPERTY(QString currentAlarmMsg READ currentAlarmMsg NOTIFY alarmStatusChanged)
     
-    // 串口状态
+    // 串口/UDP状态
     Q_PROPERTY(bool isSerialOpen READ isSerialOpen NOTIFY serialStatusChanged)
     Q_PROPERTY(QString currentPortName READ currentPortName NOTIFY serialStatusChanged)
+    Q_PROPERTY(bool isUdpOpen READ isUdpOpen NOTIFY udpStatusChanged)
+    Q_PROPERTY(int currentUdpPort READ currentUdpPort NOTIFY udpStatusChanged)
 
 public:
     double temperature() const { return m_temperature; }
@@ -102,6 +109,9 @@ public:
     
     bool isSerialOpen() const;
     QString currentPortName() const;
+    
+    bool isUdpOpen() const;
+    int currentUdpPort() const;
 
 signals:
     // --- 属性变化信号 ---
@@ -122,6 +132,7 @@ signals:
     
     void alarmStatusChanged();
     void serialStatusChanged();
+    void udpStatusChanged();
 
     // --- 自定义信号 ---
     // 发送日志消息给 QML 显示
@@ -132,10 +143,13 @@ private slots:
     void onSimulateDataUpdate();
     // 串口读取数据的槽函数
     void onReadyRead();
+    // UDP读取数据的槽函数
+    void onUdpReadyRead();
 
 private:
     void checkAlarms(); // 检查各项数据是否触发报警
     void sendAlarmToSerial(const QString &msg); // 向串口发送报警数据
+    void processJsonData(QByteArray &buffer); // 解析JSON数据的通用函数
 
     double m_phValue;
     double m_dissolvedOxygen;
@@ -158,6 +172,8 @@ private:
 
     QTimer *m_timer; // 用于定时模拟数据更新
     QSerialPort *m_serialPort; // 串口对象
+    QUdpSocket *m_udpSocket; // UDP socket对象
+    int m_currentUdpPort; // 当前监听的UDP端口
     QByteArray m_serialBuffer; // 串口数据缓存
 };
 

@@ -18,11 +18,16 @@ SystemData::SystemData(QObject *parent) : QObject(parent),
     m_windSpeed(3.2),
     m_windDirection("东北 NE"),
     m_hasAlarm(false),
-    m_alarmAcknowledged(false)
+    m_alarmAcknowledged(false),
+    m_currentUdpPort(8080)
 {
     // 初始化串口对象
     m_serialPort = new QSerialPort(this);
     connect(m_serialPort, &QSerialPort::readyRead, this, &SystemData::onReadyRead);
+
+    // 初始化UDP Socket对象
+    m_udpSocket = new QUdpSocket(this);
+    connect(m_udpSocket, &QUdpSocket::readyRead, this, &SystemData::onUdpReadyRead);
 
     // 初始化遥测数据
     m_droneTelemetry = {
@@ -56,6 +61,7 @@ SystemData::SystemData(QObject *parent) : QObject(parent),
 SystemData::~SystemData()
 {
     closeSerialPort();
+    closeUdpPort();
 }
 
 bool SystemData::isSerialOpen() const
@@ -69,6 +75,16 @@ QString SystemData::currentPortName() const
         return m_serialPort->portName();
     }
     return "";
+}
+
+bool SystemData::isUdpOpen() const
+{
+    return m_udpSocket && m_udpSocket->state() == QUdpSocket::BoundState;
+}
+
+int SystemData::currentUdpPort() const
+{
+    return m_currentUdpPort;
 }
 
 QStringList SystemData::getAvailablePorts()
@@ -115,40 +131,80 @@ void SystemData::closeSerialPort()
     }
 }
 
+bool SystemData::openUdpPort(int port)
+{
+    if (m_udpSocket->state() == QUdpSocket::BoundState) {
+        m_udpSocket->close();
+    }
+    
+    // 绑定到所有本地网络接口的指定端口，支持广播和多播接收
+    if (m_udpSocket->bind(QHostAddress::AnyIPv4, port, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
+        m_currentUdpPort = port;
+        emit logMessage(QString("UDP监听已在端口 %1 启动").arg(port));
+        emit udpStatusChanged();
+        return true;
+    } else {
+        emit logMessage(QString("无法绑定UDP端口 %1: %2").arg(port).arg(m_udpSocket->errorString()));
+        emit udpStatusChanged();
+        return false;
+    }
+}
+
+void SystemData::closeUdpPort()
+{
+    if (m_udpSocket->state() == QUdpSocket::BoundState) {
+        m_udpSocket->close();
+        emit logMessage("UDP监听已手动关闭");
+        emit udpStatusChanged();
+    }
+}
+
 void SystemData::sendCommand(const QString &device, const QString &action)
 {
-    if (!m_serialPort->isOpen()) {
-        emit logMessage(QString("发送失败：串口未打开"));
-        return;
-    }
-
     QJsonObject jsonObj;
     jsonObj[device] = action; // device为 "UVA" 或 "USV", action为 "start" 或 "close"
 
     QJsonDocument doc(jsonObj);
     QByteArray data = doc.toJson(QJsonDocument::Compact) + "\n"; // 压缩格式并追加换行符
 
-    qint64 bytesWritten = m_serialPort->write(data);
-    if (bytesWritten == -1) {
-        emit logMessage(QString("发送命令失败: %1").arg(m_serialPort->errorString()));
+    // 优先通过串口发送
+    if (m_serialPort->isOpen()) {
+        qint64 bytesWritten = m_serialPort->write(data);
+        if (bytesWritten == -1) {
+            emit logMessage(QString("发送命令失败: %1").arg(m_serialPort->errorString()));
+        } else {
+            emit logMessage(QString("已通过串口发送控制命令: %1").arg(QString(data).trimmed()));
+        }
+    } 
+    // 如果串口未开，但 UDP 监听正常，则通过 UDP 广播发送 (假定 Python 脚本监听 8081 接收指令并转发给串口)
+    else if (m_udpSocket->state() == QUdpSocket::BoundState) {
+        qint64 bytesWritten = m_udpSocket->writeDatagram(data, QHostAddress::Broadcast, 8081);
+        // 如果需要发给本机，也可以写 QHostAddress::LocalHost
+        if (bytesWritten == -1) {
+            emit logMessage(QString("UDP发送命令失败: %1").arg(m_udpSocket->errorString()));
+        } else {
+            emit logMessage(QString("已通过UDP发送控制命令: %1").arg(QString(data).trimmed()));
+        }
     } else {
-        emit logMessage(QString("已发送控制命令: %1").arg(QString(data).trimmed()));
+        emit logMessage(QString("发送失败：串口未打开且UDP未绑定"));
     }
 }
 
 void SystemData::sendAlarmToSerial(const QString &msg)
 {
-    if (!m_serialPort->isOpen()) return;
-    
     QJsonObject jsonObj;
     jsonObj["ALARM"] = msg;
     
     QJsonDocument doc(jsonObj);
     QByteArray data = doc.toJson(QJsonDocument::Compact) + "\n";
-    m_serialPort->write(data);
     
-    // 我们还可以用红色字打印报警记录
-    emit logMessage(QString("<font color='red'>[警报已发送] %1</font>").arg(msg));
+    if (m_serialPort->isOpen()) {
+        m_serialPort->write(data);
+        emit logMessage(QString("<font color='red'>[警报已通过串口发送] %1</font>").arg(msg));
+    } else if (m_udpSocket->state() == QUdpSocket::BoundState) {
+        m_udpSocket->writeDatagram(data, QHostAddress::Broadcast, 8081);
+        emit logMessage(QString("<font color='red'>[警报已通过UDP发送] %1</font>").arg(msg));
+    }
 }
 
 void SystemData::acknowledgeAlarm()
@@ -206,18 +262,35 @@ void SystemData::onReadyRead()
 {
     // 接收串口数据并存入缓存
     m_serialBuffer.append(m_serialPort->readAll());
+    processJsonData(m_serialBuffer);
+}
 
+void SystemData::onUdpReadyRead()
+{
+    while (m_udpSocket->hasPendingDatagrams()) {
+        QByteArray datagram;
+        datagram.resize(m_udpSocket->pendingDatagramSize());
+        m_udpSocket->readDatagram(datagram.data(), datagram.size());
+        
+        // 由于UDP通常是完整的数据包，我们将其追加到缓存中进行统一处理
+        m_serialBuffer.append(datagram);
+    }
+    processJsonData(m_serialBuffer);
+}
+
+void SystemData::processJsonData(QByteArray &buffer)
+{
     // 不再简单依赖 '\n' 作为单行分割，而是通过大括号匹配来寻找完整的 JSON 对象
     // 这可以完美处理带有换行符的格式化 JSON 字符串
     int braceCount = 0;
     int startIndex = -1;
     bool inString = false;
     
-    for (int i = 0; i < m_serialBuffer.length(); ++i) {
-        char c = m_serialBuffer.at(i);
+    for (int i = 0; i < buffer.length(); ++i) {
+        char c = buffer.at(i);
         
         // 处理字符串中的大括号（忽略它们）
-        if (c == '"' && (i == 0 || m_serialBuffer.at(i-1) != '\\')) {
+        if (c == '"' && (i == 0 || buffer.at(i-1) != '\\')) {
             inString = !inString;
             continue;
         }
@@ -232,10 +305,10 @@ void SystemData::onReadyRead()
                 braceCount--;
                 if (braceCount == 0 && startIndex != -1) {
                     // 找到了一个完整的 JSON 对象
-                    QByteArray jsonStr = m_serialBuffer.mid(startIndex, i - startIndex + 1);
+                    QByteArray jsonStr = buffer.mid(startIndex, i - startIndex + 1);
                     
                     // 将处理过的部分从缓存中移除 (包括它前面的无用字符)
-                    m_serialBuffer.remove(0, i + 1);
+                    buffer.remove(0, i + 1);
                     
                     // 重新从头开始找下一个 JSON (因为缓存长度改变了)
                     i = -1; 

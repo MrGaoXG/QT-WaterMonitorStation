@@ -26,8 +26,10 @@ Window {
     }
     
     // 增加全局缩放比例，让字体和元素随窗口大小自适应
-    // 针对 7 寸屏（通常 800x480 或 1024x600）进行优化
-    property real scaleRatio: Math.min(width / 1920, height / 1080)
+    // 针对 7 寸屏进行极度优化，采用分别拉伸宽高的方式填满全屏，去除黑边
+    property real scaleX: width / 1920
+    property real scaleY: height / 1080
+    property real scaleRatio: Math.min(scaleX, scaleY) // 仅供部分需要等比的地方使用
     
     // 基础字体大小系数，确保在小屏幕下字体不会缩得太小
     // 再次提升下限，针对 7 寸屏进行极度优化，设置为几乎不缩小
@@ -62,7 +64,13 @@ Window {
         width: 1920
         height: 1080
         anchors.centerIn: parent
-        scale: window.scaleRatio
+        // 使用独立缩放分别拉伸宽高，铺满屏幕并消除黑边
+        transform: Scale { 
+            origin.x: 1920 / 2
+            origin.y: 1080 / 2
+            xScale: window.scaleX
+            yScale: window.scaleY
+        }
 
         Image {
             id: backgroundImage; anchors.fill: parent; source: "qrc:/background.png"; fillMode: Image.PreserveAspectCrop
@@ -743,7 +751,7 @@ Window {
         // 7. 系统设置面板 (弹出式)
         Rectangle {
             id: settingPopup
-            width: 500; height: 400; radius: 10 // 400x300 -> 500x400
+            width: 500; height: 550; radius: 10 // 400x300 -> 500x550 增加高度以容纳UDP设置
             color: Qt.rgba(0, 30/255, 40/255, 0.95); border.color: "#00A8FF"; border.width: 2
             anchors.centerIn: parent
             visible: false
@@ -751,25 +759,73 @@ Window {
             
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 20
-                spacing: 20 // 15 -> 20
+                spacing: 15 
                 
                 // 标题栏
                 RowLayout {
                     Layout.fillWidth: true
-                    Text { text: "⚙ 系统配置"; color: "#00FFFF"; font.pixelSize: 28; font.bold: true } // 22 -> 28
+                    Text { text: "⚙ 系统配置"; color: "#00FFFF"; font.pixelSize: 28; font.bold: true } 
                     Item { Layout.fillWidth: true } // 占位
                     Text { 
-                        text: "✖"; color: "white"; font.pixelSize: 20 
+                        text: "✖"; color: "white"; font.pixelSize: 24; font.bold: true
                         MouseArea { anchors.fill: parent; onClicked: settingPopup.visible = false }
                     }
                 }
                 
                 Rectangle { Layout.fillWidth: true; height: 1; color: "#00A8FF" } // 分割线
                 
-                // 串口设置区
+                // --- UDP 设置区 ---
+                Text { text: "本地 UDP 监听设置 (接收数据)"; color: "#00FFFF"; font.pixelSize: 18; font.bold: true; Layout.topMargin: 10 }
                 GridLayout {
-                    columns: 2; columnSpacing: 20; rowSpacing: 20
-                    Layout.fillWidth: true; Layout.topMargin: 10
+                    columns: 2; columnSpacing: 20; rowSpacing: 15
+                    Layout.fillWidth: true
+                    
+                    Text { text: "监听端口:"; color: "#00A8FF"; font.pixelSize: 16 }
+                    TextField {
+                        id: udpPortInput
+                        Layout.fillWidth: true
+                        text: "8080"
+                        color: "white"
+                        background: Rectangle { color: "#11FFFFFF"; border.color: "#00A8FF" }
+                        font.pixelSize: 16
+                    }
+                    
+                    Text { text: "当前状态:"; color: "#00A8FF"; font.pixelSize: 16 }
+                    RowLayout {
+                        Rectangle { width: 12; height: 12; radius: 6; color: systemData.isUdpOpen ? "#00FF00" : "#FF0000" }
+                        Text { text: systemData.isUdpOpen ? "正在监听 (" + systemData.currentUdpPort + ")" : "未开启"
+                               color: systemData.isUdpOpen ? "#00FF00" : "#FF0000"; font.pixelSize: 16 }
+                    }
+                }
+                
+                RowLayout {
+                    Layout.fillWidth: true
+                    Item { Layout.fillWidth: true }
+                    TechButton {
+                        text: systemData.isUdpOpen ? "停止监听" : "启动监听"
+                        Layout.preferredWidth: 150; Layout.preferredHeight: 40
+                        onClicked: {
+                            if (systemData.isUdpOpen) {
+                                systemData.closeUdpPort()
+                            } else {
+                                var port = parseInt(udpPortInput.text)
+                                if (port > 0) {
+                                    systemData.openUdpPort(port)
+                                } else {
+                                    msgPopup.display("请输入有效的UDP端口号")
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                Rectangle { Layout.fillWidth: true; height: 1; color: Qt.rgba(0, 168/255, 1, 0.3); Layout.topMargin: 10; Layout.bottomMargin: 10 } // 分割线
+                
+                // --- 串口设置区 (主要用于发送指令) ---
+                Text { text: "硬件串口设置 (发送控制指令)"; color: "#00FFFF"; font.pixelSize: 18; font.bold: true }
+                GridLayout {
+                    columns: 2; columnSpacing: 20; rowSpacing: 15
+                    Layout.fillWidth: true
                     
                     Text { text: "通信端口:"; color: "#00A8FF"; font.pixelSize: 16 }
                     ComboBox {
@@ -786,7 +842,7 @@ Window {
                         id: baudCombo
                         Layout.fillWidth: true
                         model: ["9600", "115200", "38400", "4800"]
-                        currentIndex: 0
+                        currentIndex: 1 // 默认设为 115200
                     }
                     
                     Text { text: "当前状态:"; color: "#00A8FF"; font.pixelSize: 16 }
@@ -805,7 +861,7 @@ Window {
                     spacing: 20
                     
                     TechButton {
-                        text: systemData.isSerialOpen ? "断开连接" : "连接串口"
+                        text: systemData.isSerialOpen ? "断开串口" : "连接串口"
                         Layout.fillWidth: true
                         onClicked: {
                             if (systemData.isSerialOpen) {
