@@ -15,6 +15,8 @@ import os
 import subprocess
 import socket
 import serial
+import json
+import ollama
 
 # 导入自定义模块
 import config
@@ -132,6 +134,88 @@ class SerialUDPBridge:
         self.send_sock.close()
         self.recv_sock.close()
 
+class AIDataAnalyst:
+    """本地大模型数据分析与聊天引擎"""
+    def __init__(self, udp_listen_port=8080, udp_send_port=8080):
+        self.udp_listen_port = udp_listen_port
+        self.udp_send_port = udp_send_port
+        self.latest_data = {}  # 存储最新的传感器快照
+        self.running = False
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        
+    def start(self):
+        self.running = True
+        # 启动监听线程，实时更新 AI 的“记忆”
+        self.listen_thread = threading.Thread(target=self._data_listener, daemon=True)
+        self.listen_thread.start()
+        
+        # 启动指令监听线程 (监听来自 Qt 的 AI 提问)
+        self.cmd_thread = threading.Thread(target=self._command_listener, daemon=True)
+        self.cmd_thread.start()
+        print(f"✓ AI 数据分析引擎已启动: 监听端口({self.udp_listen_port})")
+
+    def _data_listener(self):
+        """监听 8080 端口，获取 Qt 正在显示的数据广播"""
+        # 注意：这里需要一个新的 socket 来监听广播数据
+        data_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        data_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        data_sock.bind(('0.0.0.0', self.udp_listen_port))
+        data_sock.settimeout(1.0)
+        
+        while self.running:
+            try:
+                data, addr = data_sock.recvfrom(4096)
+                # 尝试解析收到的 JSON
+                try:
+                    raw_json = data.decode('utf-8', errors='ignore')
+                    # 简单过滤，确保是传感器数据包
+                    if "ph" in raw_json or "bat" in raw_json:
+                        self.latest_data = json.loads(raw_json)
+                except:
+                    continue
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"AI数据监听异常: {e}")
+        data_sock.close()
+
+    def _command_listener(self):
+        """监听来自 Qt 的 AI 提问指令 (假定使用特定前缀或单独端口，这里复用 8081 进行接收)"""
+        # 为了不冲突，我们由 SensorSystem 统一分配
+        pass
+
+    def process_ai_query(self, query_text):
+        """结合当前数据回答用户问题"""
+        print(f"🤖 收到 AI 咨询: {query_text}")
+        
+        # 构建带有实时数据的系统提示词
+        system_context = f"""
+        你是一个专业的水质监测站 AI 助手。
+        当前系统实时数据快照: {json.dumps(self.latest_data, ensure_ascii=False)}
+        
+        任务指引:
+        1. 结合上述实时数据回答用户问题。
+        2. 如果数据中有明显异常（如PH值不在6-9之间，或无人机/船电量低于20%），请在回答中主动指出并给出警告。
+        3. 语言风格: 专业、简洁、友好，使用中文回答。
+        """
+        
+        try:
+            # 使用 qwen2.5 模型进行应答
+            response = ollama.chat(model='qwen2.5', messages=[
+                {'role': 'system', 'content': system_context},
+                {'role': 'user', 'content': query_text},
+            ])
+            ans = response['message']['content']
+            print(f"🤖 AI 回答完毕")
+            return ans
+        except Exception as e:
+            return f"AI 引擎调用失败: {str(e)}"
+
+    def stop(self):
+        self.running = False
+        self.sock.close()
+
 class SensorSystem:
     """传感器数据采集系统"""
     
@@ -159,6 +243,10 @@ class SensorSystem:
         self.logger = logging.getLogger(__name__)
         
         self.logger.info("系统正在初始化...")
+        
+        # 初始化 AI 分析引擎
+        self.ai_analyst = AIDataAnalyst(udp_listen_port=8080)
+        self.ai_analyst.start()
         
         # 初始化传感器读取器
         self.sensor_reader = SensorReader(
@@ -198,7 +286,40 @@ class SensorSystem:
         # --- 新增：启动串口与UDP桥接服务 ---
         self.bridge = SerialUDPBridge(serial_port='/dev/ttyS0', baud_rate=9600)
         self.bridge.start()
-    
+        
+        # 启动 AI 交互监听线程
+        self.ai_interaction_thread = threading.Thread(target=self._ai_interaction_loop, daemon=True)
+        self.ai_interaction_thread.start()
+
+    def _ai_interaction_loop(self):
+        """专门监听来自 Qt 的 AI 咨询请求 (使用 UDP 8082 端口)"""
+        ai_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        ai_sock.bind(('0.0.0.0', 8082))
+        ai_sock.settimeout(1.0)
+        
+        # 用于将 AI 回复发回给 Qt 的 socket (发送到 8080，让 Qt 的日志栏收到)
+        resp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        
+        while self.running:
+            try:
+                data, addr = ai_sock.recvfrom(2048)
+                query = data.decode('utf-8', errors='ignore').strip()
+                if query:
+                    # 调用 AI 引擎分析
+                    answer = self.ai_analyst.process_ai_query(query)
+                    
+                    # 构造一个模拟的 JSON 包发回给 Qt 
+                    # 这样 Qt 的 processJsonData 也会处理它，或者我们可以直接发纯文本
+                    # 这里为了方便，我们发一个带有特殊前缀的字符串
+                    reply = f"[AI诊断回复] {answer}"
+                    resp_sock.sendto(reply.encode('utf-8'), ('127.0.0.1', 8080))
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"AI交互异常: {e}")
+        ai_sock.close()
+        resp_sock.close()
+
     def _init_uploader(self):
         """初始化数据上传器"""
         upload_method = config.UPLOAD_METHOD.lower()
@@ -670,6 +791,10 @@ if __name__ == "__main__":
         """停止系统"""
         self.running = False
         
+        # --- 新增：关闭 AI 引擎 ---
+        if hasattr(self, 'ai_analyst'):
+            self.ai_analyst.stop()
+            
         # --- 新增：关闭桥接 ---
         if hasattr(self, 'bridge'):
             self.bridge.stop()

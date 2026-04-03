@@ -209,6 +209,28 @@ Window {
                         onClicked: settingPopup.visible = true
                     }
                 }
+
+                // AI 助手按钮
+                Rectangle {
+                    width: 44; height: 44; radius: 22
+                    color: "transparent"; border.color: "#00FFFF"; border.width: 2
+                    Text { text: "🤖"; anchors.centerIn: parent; font.pixelSize: 22 }
+                    
+                    // 呼吸灯动画效果
+                    SequentialAnimation on opacity {
+                        loops: Animation.Infinite
+                        NumberAnimation { from: 1.0; to: 0.4; duration: 1500; easing.type: Easing.InOutQuad }
+                        NumberAnimation { from: 0.4; to: 1.0; duration: 1500; easing.type: Easing.InOutQuad }
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onEntered: parent.color = Qt.rgba(0, 255/255, 255/255, 0.2)
+                        onExited: parent.color = "transparent"
+                        onClicked: aiChatPopup.open()
+                    }
+                }
                 
                 Text {
                     text: "LOCAL TIME"; color: "#00A8FF"; font.family: customFont.name; font.pixelSize: 18 // 16 -> 18
@@ -876,6 +898,166 @@ Window {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // --- AI 聊天助手面板 ---
+        Popup {
+            id: aiChatPopup
+            width: 600; height: 750
+            anchors.centerIn: parent
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            
+            // 将函数移到 Popup 的根部，确保其在整个面板内可见
+            function sendToAI(msg) {
+                if (!msg || msg.trim() === "") return;
+                
+                // 1. 将用户消息添加到聊天模型中，显示在界面上
+                chatModel.append({ "text": msg.trim(), "isUser": true });
+                
+                // 2. 调用后端 C++ 接口发送 UDP 请求
+                systemData.askAI(msg.trim());
+                
+                // 3. 清空输入框
+                chatInput.text = ""; 
+                
+                // 4. 添加一个 AI 正在思考的占位符
+                chatModel.append({ "text": "正在思考分析中...", "isUser": false });
+                
+                // 5. 滚动到底部
+                chatListView.positionViewAtEnd();
+            }
+
+            background: Rectangle {
+                color: Qt.rgba(0.01, 0.05, 0.1, 0.98)
+                border.color: "#00FFFF"
+                border.width: 2
+                radius: 15
+                
+                // 科技感发光边框效果
+                Rectangle {
+                    anchors.fill: parent; anchors.margins: -4; radius: 18
+                    color: "transparent"; border.color: Qt.rgba(0, 1, 1, 0.2); border.width: 1
+                }
+            }
+
+            ColumnLayout {
+                anchors.fill: parent; anchors.margins: 20; spacing: 15
+
+                // 标题栏
+                RowLayout {
+                    Layout.fillWidth: true
+                    Rectangle { width: 30; height: 30; color: "transparent"; Text { text: "🤖"; font.pixelSize: 24; anchors.centerIn: parent } }
+                    Text { text: "AI 智能分析助手"; color: "#00FFFF"; font.pixelSize: 24; font.bold: true }
+                    Item { Layout.fillWidth: true }
+                    Text { 
+                        text: "✖"; color: "white"; font.pixelSize: 24; font.bold: true
+                        MouseArea { anchors.fill: parent; onClicked: aiChatPopup.close() }
+                    }
+                }
+
+                Rectangle { Layout.fillWidth: true; height: 1; color: Qt.rgba(0, 1, 1, 0.3) }
+
+                // 聊天显示区域
+                ScrollView {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    clip: true
+                    ScrollBar.vertical.policy: ScrollBar.AlwaysOn
+                    
+                    ListView {
+                        id: chatListView
+                        model: ListModel { id: chatModel }
+                        spacing: 15
+                        delegate: ColumnLayout {
+                            width: chatListView.width - 20
+                            spacing: 5
+                            RowLayout {
+                                Layout.alignment: model.isUser ? Qt.AlignRight : Qt.AlignLeft
+                                Rectangle {
+                                    width: 32; height: 32; radius: 16
+                                    color: model.isUser ? "#00A8FF" : "#00FFFF"
+                                    Text { text: model.isUser ? "👤" : "🤖"; anchors.centerIn: parent; font.pixelSize: 18 }
+                                }
+                                Text { text: model.isUser ? "用户" : "AI助手"; color: "#AAAAAA"; font.pixelSize: 14 }
+                            }
+                            Rectangle {
+                                Layout.preferredWidth: Math.min(textMetrics.width + 20, chatListView.width - 60)
+                                Layout.preferredHeight: textContent.contentHeight + 20
+                                Layout.alignment: model.isUser ? Qt.AlignRight : Qt.AlignLeft
+                                color: model.isUser ? "#1A4F73" : "#123E3F"
+                                radius: 10
+                                border.color: model.isUser ? "#00A8FF" : "#00FFFF"
+                                border.width: 1
+                                
+                                Text {
+                                    id: textContent
+                                    text: model.text
+                                    color: "white"
+                                    font.pixelSize: 16
+                                    wrapMode: Text.Wrap
+                                    anchors.fill: parent; anchors.margins: 10
+                                }
+                                TextMetrics { id: textMetrics; font: textContent.font; text: textContent.text }
+                            }
+                        }
+                        onCountChanged: chatListView.currentIndex = count - 1
+                    }
+                }
+
+                // 快捷问题推荐区
+                Text { text: "快捷咨询推荐："; color: "#00FFFF"; font.pixelSize: 14; font.italic: true }
+                Flow {
+                    Layout.fillWidth: true; spacing: 10
+                    Repeater {
+                        model: ["分析当前状态", "PH值是否正常?", "无人机电量状态", "今天天气如何?", "给出运维建议"]
+                        Rectangle {
+                            width: quickText.width + 20; height: 30; radius: 15
+                            color: "transparent"; border.color: Qt.rgba(0, 1, 1, 0.4); border.width: 1
+                            Text { id: quickText; text: modelData; color: "#00FFFF"; font.pixelSize: 14; anchors.centerIn: parent }
+                            MouseArea {
+                                anchors.fill: parent; hoverEnabled: true
+                                onEntered: parent.color = Qt.rgba(0, 1, 1, 0.1)
+                                onExited: parent.color = "transparent"
+                                onClicked: aiChatPopup.sendToAI(modelData)
+                            }
+                        }
+                    }
+                }
+
+                // 输入区域
+                RowLayout {
+                    Layout.fillWidth: true; spacing: 10
+                    TextField {
+                        id: chatInput
+                        Layout.fillWidth: true
+                        placeholderText: "请输入你想咨询的问题..."
+                        color: "white"; font.pixelSize: 16
+                        background: Rectangle { color: "#11FFFFFF"; border.color: "#00FFFF"; radius: 5 }
+                        onAccepted: sendToAI(text)
+                    }
+                    TechButton {
+                        text: "发送"
+                        Layout.preferredWidth: 80; Layout.preferredHeight: 40
+                        onClicked: aiChatPopup.sendToAI(chatInput.text)
+                    }
+                }
+            }
+            
+            // 移除原本在 ColumnLayout 外部的重复函数定义，保留 Connections 逻辑
+            Connections {
+                target: systemData
+                function onLogMessage(msg) {
+                    if (msg.indexOf("[AI诊断回复]") !== -1) {
+                        // 移除占位
+                        if (chatModel.count > 0 && chatModel.get(chatModel.count-1).text === "正在思考分析中...") {
+                            chatModel.remove(chatModel.count-1);
+                        }
+                        var reply = msg.replace("[AI诊断回复] ", "");
+                        chatModel.append({ "text": reply, "isUser": false });
                     }
                 }
             }

@@ -213,6 +213,23 @@ void SystemData::acknowledgeAlarm()
     emit alarmStatusChanged();
 }
 
+void SystemData::askAI(const QString &question)
+{
+    // 创建一个临时的 UDP socket 用来发送 AI 请求
+    // 这样做可以绕过 m_udpSocket 是否绑定的限制，确保请求始终能发出去
+    QUdpSocket tempSocket;
+    QByteArray data = question.toUtf8();
+    
+    // 发送到 8082 端口供 Python 的 AI 监听线程处理
+    qint64 bytes = tempSocket.writeDatagram(data, QHostAddress::LocalHost, 8082);
+    
+    if (bytes != -1) {
+        emit logMessage(QString("<font color='#AAAAAA'>[AI咨询] %1</font>").arg(question));
+    } else {
+        emit logMessage("<font color='red'>AI咨询发送失败</font>");
+    }
+}
+
 void SystemData::checkAlarms()
 {
     QStringList alarms;

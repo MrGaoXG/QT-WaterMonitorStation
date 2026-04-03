@@ -82,6 +82,9 @@ public:
     // 确认报警已读
     Q_INVOKABLE void acknowledgeAlarm();
 
+    // 发送 AI 聊天请求
+    Q_INVOKABLE void askAI(const QString &question);
+
     // 新增：环境气象数据属性
     Q_PROPERTY(double temperature READ temperature NOTIFY temperatureChanged)
     Q_PROPERTY(double humidity READ humidity NOTIFY humidityChanged)
