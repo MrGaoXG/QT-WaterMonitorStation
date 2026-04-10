@@ -47,6 +47,8 @@ Window {
     Component.onCompleted: {
         // 尝试打开默认串口（不再强制，改为用户手动在设置面板操作，或者保留尝试逻辑但不报错）
         systemData.openSerialPort("COM7", 9600)
+        // 自动打开 UDP 监听，确保能接收 Python 发送的 AI 诊断回复和传感器数据
+        systemData.openUdpPort(8080)
     }
 
     function addLog(msg) {
@@ -305,10 +307,10 @@ Window {
                         title: "过去24小时趋势"
                         titleColor: "#00A8FF"
                         titleFont.family: customFont.name
-                        titleFont.pixelSize: 22 // 18 -> 22
+                        titleFont.pixelSize: 28 // 22 -> 28
                         legend.visible: true
                         legend.labelColor: "white"
-                        legend.font.pixelSize: 16 // 14 -> 16
+                        legend.font.pixelSize: 22 // 16 -> 22
                         backgroundColor: "transparent"
                         plotAreaColor: Qt.rgba(0, 50/255, 50/255, 0.2)
                         antialiasing: true
@@ -320,7 +322,7 @@ Window {
                             tickCount: 7
                             labelFormat: "%d"
                             labelsColor: "#00A8FF"
-                            labelsFont.pixelSize: 16 // 14 -> 16
+                            labelsFont.pixelSize: 20 // 16 -> 20
                             gridLineColor: Qt.rgba(0, 1.0, 1.0, 0.2)
                         }
 
@@ -329,7 +331,7 @@ Window {
                             min: 0; max: 40
                             tickCount: 5
                             labelsColor: "#00A8FF"
-                            labelsFont.pixelSize: 16 // 14 -> 16
+                            labelsFont.pixelSize: 20 // 16 -> 20
                             gridLineColor: Qt.rgba(0, 1.0, 1.0, 0.2)
                         }
 
@@ -497,9 +499,9 @@ Window {
             
             HudPanel {
                 title: "无人系统遥测监测 (Telemetry)"
-                width: parent.width * 0.9; height: 220 // 0.8 -> 0.9, 180 -> 220
+                width: parent.width * 0.9; height: 260 // 220 -> 260 增加高度以适应更大字体
                 anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottomMargin: 10
+                anchors.bottomMargin: 80 // 10 -> 80 向上移动整个面板，避免拥挤，更美观
                 
                 RowLayout {
                     anchors.fill: parent; anchors.margins: 20; spacing: 40 // 15 -> 20, 30 -> 40
@@ -507,15 +509,15 @@ Window {
                     // 无人机遥测数据
                     ColumnLayout {
                         Layout.fillWidth: true; spacing: 15 // 10 -> 15
-                        Text { text: "● 无人机 (UAV)"; color: "#0088FF"; font.pixelSize: 24; font.bold: true } // 20 -> 24
+                        Text { text: "● 无人机 (UAV)"; color: "#0088FF"; font.pixelSize: 28; font.bold: true } // 24 -> 28
                         GridLayout {
-                            columns: 2; columnSpacing: 30; rowSpacing: 10 // 20 -> 30, 8 -> 10
-                            Text { text: "高度 ALT:"; color: "#00A8FF"; font.pixelSize: 20; Layout.preferredWidth: 120 } // 18 -> 20, 100 -> 120
-                            Text { text: systemData.droneTelemetry.altitude + " m"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 28 } // 24 -> 28
-                            Text { text: "速度 SPD:"; color: "#00A8FF"; font.pixelSize: 20 }
-                            Text { text: systemData.droneTelemetry.speed + " m/s"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 28 }
-                            Text { text: "信号 SIG:"; color: "#00A8FF"; font.pixelSize: 20 }
-                            Text { text: systemData.droneTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 28 }
+                            columns: 2; columnSpacing: 30; rowSpacing: 15 // 10 -> 15
+                            Text { text: "高度 ALT:"; color: "#00A8FF"; font.pixelSize: 24; Layout.preferredWidth: 140 } // 20 -> 24, 120 -> 140
+                            Text { text: systemData.droneTelemetry.altitude + " m"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 36 } // 28 -> 36
+                            Text { text: "速度 SPD:"; color: "#00A8FF"; font.pixelSize: 24 }
+                            Text { text: systemData.droneTelemetry.speed + " m/s"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 36 }
+                            Text { text: "信号 SIG:"; color: "#00A8FF"; font.pixelSize: 24 }
+                            Text { text: systemData.droneTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 36 }
                         }
                     }
                     
@@ -525,15 +527,15 @@ Window {
                     // 无人船遥测数据
                     ColumnLayout {
                         Layout.fillWidth: true; spacing: 15
-                        Text { text: "● 无人船 (USV)"; color: "#FF3333"; font.pixelSize: 24; font.bold: true } // 20 -> 24
+                        Text { text: "● 无人船 (USV)"; color: "#FF3333"; font.pixelSize: 28; font.bold: true } // 24 -> 28
                         GridLayout {
-                            columns: 2; columnSpacing: 30; rowSpacing: 10
-                            Text { text: "航速 SPD:"; color: "#00A8FF"; font.pixelSize: 20; Layout.preferredWidth: 120 } // 18 -> 20
-                            Text { text: systemData.shipTelemetry.speed + " kn"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 28 } // 24 -> 28
-                            Text { text: "航向 HDG:"; color: "#00A8FF"; font.pixelSize: 20 }
-                            Text { text: systemData.shipTelemetry.heading + " °"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 28 }
-                            Text { text: "通信 SIG:"; color: "#00A8FF"; font.pixelSize: 20 }
-                            Text { text: systemData.shipTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 28 }
+                            columns: 2; columnSpacing: 30; rowSpacing: 15 // 10 -> 15
+                            Text { text: "航速 SPD:"; color: "#00A8FF"; font.pixelSize: 24; Layout.preferredWidth: 140 } // 20 -> 24, 120 -> 140
+                            Text { text: systemData.shipTelemetry.speed + " kn"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 36 } // 28 -> 36
+                            Text { text: "航向 HDG:"; color: "#00A8FF"; font.pixelSize: 24 }
+                            Text { text: systemData.shipTelemetry.heading + " °"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 36 }
+                            Text { text: "通信 SIG:"; color: "#00A8FF"; font.pixelSize: 24 }
+                            Text { text: systemData.shipTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 36 }
                         }
                     }
                 }
@@ -906,7 +908,9 @@ Window {
         // --- AI 聊天助手面板 ---
         Popup {
             id: aiChatPopup
-            width: 600; height: 750
+            // 使用自适应宽高：宽度为屏幕宽度的50%（不低于500），高度为屏幕高度的85%
+            width: Math.max(window.width * 0.5, 500); 
+            height: window.height * 0.85
             anchors.centerIn: parent
             modal: true
             focus: true

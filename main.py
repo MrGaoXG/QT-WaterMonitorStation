@@ -16,7 +16,29 @@ import subprocess
 import socket
 import serial
 import json
-import ollama
+import os
+import asyncio
+import edge_tts
+import queue
+
+# --- 新增：语音模块依赖检查 ---
+HAS_PYTTSX3 = True  # 为了保持原有逻辑的兼容性标志，实际已切换为 edge-tts
+
+try:
+    import pyaudio
+    from vosk import Model, KaldiRecognizer
+    HAS_VOSK = True
+except ImportError:
+    HAS_VOSK = False
+# ------------------------------
+
+try:
+    from llama_cpp import Llama
+    HAS_LLAMA_CPP = True
+except ImportError:
+    HAS_LLAMA_CPP = False
+    print("⚠️  未找到 llama-cpp-python 库，本地 AI 分析功能将不可用")
+    print("请运行: pip3 install llama-cpp-python")
 
 # 导入自定义模块
 import config
@@ -84,6 +106,7 @@ class SerialUDPBridge:
     def start(self):
         if not self.ser:
             return
+            
         self.running = True
         
         # 启动读串口并广播的线程
@@ -106,8 +129,8 @@ class SerialUDPBridge:
                         # 打印从串口收到的数据作为调试信息
                         print(f"[串口->UDP] 收到串口数据: {data.strip().decode('utf-8', errors='ignore')}")
                         
-                        # 仅发送一次到本地 8080 端口，避免重复发送导致 Qt 缓冲区出现双重数据
-                        self.send_sock.sendto(data, ('127.0.0.1', self.udp_send_port))
+                        # 改为 255.255.255.255 真正的广播地址，确保 Qt 和 Python 的 8080 端口都能收到
+                        self.send_sock.sendto(data, ('255.255.255.255', self.udp_send_port))
             except Exception as e:
                 pass
             time.sleep(0.01)
@@ -144,6 +167,58 @@ class AIDataAnalyst:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         
+        # --- 新增 llama.cpp 初始化 ---
+        self.llm = None
+        if HAS_LLAMA_CPP:
+            model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            if os.path.exists(model_path):
+                print(f"⏳ [边缘 AI] 正在加载 GGUF 量化模型: {model_path}...")
+                try:
+                    self.llm = Llama(
+                        model_path=model_path,
+                        n_threads=4,      # 针对 ARM 多核优化
+                        n_ctx=2048,       # 上下文窗口限制
+                        verbose=False     # 关闭 C++ 底层冗余日志
+                    )
+                    print("✅ [边缘 AI] 本地模型加载成功！内存映射(mmap)完成。")
+                except Exception as e:
+                    print(f"❌ [边缘 AI] 模型加载失败: {e}")
+            else:
+                print(f"⚠️ [边缘 AI] 模型文件未找到: {model_path}")
+                print("请在终端执行: mkdir -p models && cd models && wget https://modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/master/qwen2.5-0.5b-instruct-q4_k_m.gguf")
+                
+        # --- 新增：初始化 TTS 引擎 ---
+        self.tts_engine = None
+        if HAS_PYTTSX3:
+            # 改用 edge-tts
+            self.tts_engine = True  # 仅作标志位
+            print("✅ [TTS] Edge-TTS 语音合成引擎已就绪 (需要联网)。")
+                
+        # --- 新增：初始化 STT (语音监听) ---
+        self.stt_stream = None
+        self.stt_recognizer = None
+        self.pyaudio_instance = None
+        if HAS_VOSK:
+            model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
+            if os.path.exists(model_path):
+                print(f"⏳ [STT] 正在加载 Vosk 语音模型: {model_path}...")
+                try:
+                    self.stt_recognizer = KaldiRecognizer(Model(model_path), 16000)
+                    self.pyaudio_instance = pyaudio.PyAudio()
+                    self.stt_stream = self.pyaudio_instance.open(
+                        format=pyaudio.paInt16,
+                        channels=1,
+                        rate=16000,
+                        input=True,
+                        frames_per_buffer=8000
+                    )
+                    print("✅ [STT] 麦克风音频流已成功打开，全双工语音交互准备就绪。")
+                except Exception as e:
+                    print(f"⚠️ [STT] 麦克风打开失败: {e} (请检查硬件连接)")
+                    self.stt_stream = None
+            else:
+                print(f"⚠️ [STT] 语音模型文件未找到: {model_path} (语音识别功能将被禁用)")
+
     def start(self):
         self.running = True
         # 启动监听线程，实时更新 AI 的“记忆”
@@ -153,7 +228,35 @@ class AIDataAnalyst:
         # 启动指令监听线程 (监听来自 Qt 的 AI 提问)
         self.cmd_thread = threading.Thread(target=self._command_listener, daemon=True)
         self.cmd_thread.start()
+        
+        # --- 新增：启动麦克风语音监听线程 ---
+        if self.stt_stream and self.stt_recognizer:
+            self.stt_thread = threading.Thread(target=self._stt_listener, daemon=True)
+            self.stt_thread.start()
+            
         print(f"✓ AI 数据分析引擎已启动: 监听端口({self.udp_listen_port})")
+
+    def _stt_listener(self):
+        """后台持续监听麦克风语音输入"""
+        print("🎤 [STT] 开始持续监听语音输入...")
+        while self.running:
+            try:
+                # 每次读取 4000 帧音频数据，不抛出溢出异常
+                data = self.stt_stream.read(4000, exception_on_overflow=False)
+                if len(data) == 0:
+                    continue
+                
+                if self.stt_recognizer.AcceptWaveform(data):
+                    result = json.loads(self.stt_recognizer.Result())
+                    text = result.get("text", "").replace(" ", "")
+                    if text:
+                        print(f"\n🗣️ [语音输入] >> {text}")
+                        # 直接复用原有的 process_ai_query 流程，把语音识别的文本喂给 LLM
+                        self.process_ai_query(text)
+            except Exception as e:
+                # 简单忽略偶发的音频流读取异常，防止线程崩溃
+                pass
+        print("🎤 [STT] 语音监听线程已退出。")
 
     def _data_listener(self):
         """监听 8080 端口，获取 Qt 正在显示的数据广播"""
@@ -186,10 +289,20 @@ class AIDataAnalyst:
         pass
 
     def process_ai_query(self, query_text):
-        """结合当前数据回答用户问题"""
+        """结合当前数据回答用户问题 (通过子线程执行防止阻塞)"""
         print(f"🤖 收到 AI 咨询: {query_text}")
         
-        # 构建带有实时数据的系统提示词
+        # 启动新线程处理大模型调用，避免阻塞主接收循环
+        threading.Thread(target=self._run_llamacpp_query, args=(query_text,), daemon=True).start()
+
+    def _run_llamacpp_query(self, query_text):
+        """实际调用 llama.cpp 本地模型的方法"""
+        if not self.llm:
+            err_msg = "本地 AI 引擎未就绪 (模型未加载或依赖未安装)"
+            print(f"❌ {err_msg}")
+            self._send_ai_reply(err_msg)
+            return
+            
         system_context = f"""
         你是一个专业的水质监测站 AI 助手。
         当前系统实时数据快照: {json.dumps(self.latest_data, ensure_ascii=False)}
@@ -201,20 +314,109 @@ class AIDataAnalyst:
         """
         
         try:
-            # 使用 qwen2.5 模型进行应答
-            response = ollama.chat(model='qwen2.5', messages=[
-                {'role': 'system', 'content': system_context},
-                {'role': 'user', 'content': query_text},
-            ])
-            ans = response['message']['content']
-            print(f"🤖 AI 回答完毕")
-            return ans
+            print(f"⏳ [边缘 AI] 正在执行本地推理 (llama.cpp)...")
+            start_time = time.time()
+            
+            response = self.llm.create_chat_completion(
+                messages=[
+                    {'role': 'system', 'content': system_context},
+                    {'role': 'user', 'content': query_text},
+                ],
+                max_tokens=256,
+                temperature=0.7
+            )
+            ans = response['choices'][0]['message']['content'].strip()
+            cost_time = time.time() - start_time
+            print(f"✅ [边缘 AI] 推理完成，耗时: {cost_time:.2f} 秒")
+            
+            # 由于是异步，这里直接通过 UDP 回传结果
+            self._send_ai_reply(ans)
         except Exception as e:
-            return f"AI 引擎调用失败: {str(e)}"
+            err_str = str(e)
+            print(f"❌ [边缘 AI] 推理抛出异常: {err_str}")
+            ans = f"AI 引擎调用失败: {err_str}"
+            # 确保无论发生什么异常，都会尝试回传结果
+            self._send_ai_reply(ans)
+
+    def _send_ai_reply(self, answer):
+        """将 AI 回复发回给 Qt (发送到 8080)，并通过 TTS 朗读"""
+        print(f"📡 准备通过 UDP 回传结果至 8080...")
+        print(f"📝 AI回答内容预览:\n{answer}\n{'-'*40}")
+        try:
+            resp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            resp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            # 恢复使用原有的中文前缀，兼容未重新编译的 Qt 旧版本
+            reply = f"[AI诊断回复] {answer}"
+            # 使用广播地址发送，防止被本 Python 脚本的 8080 监听端吞包
+            bytes_sent = resp_sock.sendto(reply.encode('utf-8'), ('255.255.255.255', 8080))
+            print(f"✅ 回传成功! (已发送 {bytes_sent} 字节)")
+            resp_sock.close()
+        except Exception as e:
+            print(f"❌ 发送AI回复失败: {e}")
+            
+        # 启动单独的线程进行 TTS 朗读，防止阻塞主流程
+        # [要求] 只需要播放AI回答的文本，不要把用户的问题也读出来
+        if self.tts_engine:
+            threading.Thread(target=self._play_tts_audio, args=(answer,), daemon=True).start()
+
+    def _play_tts_audio(self, text):
+        """通过 edge-tts 和 ffmpeg/aplay 朗读 AI 的回答"""
+        if not self.tts_engine:
+            return
+            
+        async def synthesize_and_play(text):
+            voice_name = "zh-CN-XiaoxiaoNeural"
+            output_mp3 = "main_tts_output.mp3"
+            output_wav = "main_tts_output.wav"
+            
+            try:
+                print(f"🔊 [TTS] 正在使用 Edge-TTS 合成语音...")
+                # 1. 合成语音并保存为 MP3 文件
+                communicate = edge_tts.Communicate(text, voice_name)
+                await communicate.save(output_mp3)
+                
+                # 2. 使用 ffmpeg 转码为标准双声道 WAV
+                subprocess.run(
+                    ['ffmpeg', '-y', '-i', output_mp3, '-ac', '2', '-ar', '44100', output_wav],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True
+                )
+                
+                # 3. 使用 aplay 直接播放到 USB 声卡 (阻塞式播放，直到播放完毕)
+                print("🔊 [TTS] 正在通过喇叭播报...")
+                subprocess.run(
+                    ['aplay', '-D', 'plughw:3,0', '-q', output_wav],
+                    check=False
+                )
+                print("🔊 [TTS] 播报完毕。")
+                
+            except Exception as e:
+                print(f"⚠️ [TTS] 语音合成或播放失败: {e}")
+            finally:
+                # 4. 清理临时文件
+                for f in [output_mp3, output_wav]:
+                    if os.path.exists(f):
+                        try:
+                            os.remove(f)
+                        except:
+                            pass
+
+        try:
+            asyncio.run(synthesize_and_play(text))
+        except Exception as e:
+            print(f"⚠️ [TTS] 播放线程异常: {e}")
 
     def stop(self):
         self.running = False
         self.sock.close()
+        
+        # 停止麦克风录音
+        if self.stt_stream:
+            self.stt_stream.stop_stream()
+            self.stt_stream.close()
+        if self.pyaudio_instance:
+            self.pyaudio_instance.terminate()
 
 class SensorSystem:
     """传感器数据采集系统"""
@@ -305,20 +507,13 @@ class SensorSystem:
                 data, addr = ai_sock.recvfrom(2048)
                 query = data.decode('utf-8', errors='ignore').strip()
                 if query:
-                    # 调用 AI 引擎分析
-                    answer = self.ai_analyst.process_ai_query(query)
-                    
-                    # 构造一个模拟的 JSON 包发回给 Qt 
-                    # 这样 Qt 的 processJsonData 也会处理它，或者我们可以直接发纯文本
-                    # 这里为了方便，我们发一个带有特殊前缀的字符串
-                    reply = f"[AI诊断回复] {answer}"
-                    resp_sock.sendto(reply.encode('utf-8'), ('127.0.0.1', 8080))
+                    # 调用 AI 引擎分析 (现在是异步非阻塞的，内部会处理回调发送)
+                    self.ai_analyst.process_ai_query(query)
             except socket.timeout:
                 continue
             except Exception as e:
                 print(f"AI交互异常: {e}")
         ai_sock.close()
-        resp_sock.close()
 
     def _init_uploader(self):
         """初始化数据上传器"""

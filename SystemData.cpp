@@ -289,6 +289,19 @@ void SystemData::onUdpReadyRead()
         datagram.resize(m_udpSocket->pendingDatagramSize());
         m_udpSocket->readDatagram(datagram.data(), datagram.size());
         
+        // --- 新增：处理非 JSON 格式的特殊消息 (如 AI 诊断回复) ---
+        QString msgStr = QString::fromUtf8(datagram);
+        // 兼容新旧两种前缀
+        if (msgStr.startsWith("[AI诊断回复]") || msgStr.startsWith("AI_REPLY:")) {
+            // 如果是 AI_REPLY: 前缀，可以把前缀替换为中文标签再显示
+            if (msgStr.startsWith("AI_REPLY:")) {
+                msgStr.replace("AI_REPLY:", "[AI诊断回复] ");
+            }
+            // 如果是 AI 回复，直接作为日志消息发送，不要丢给 processJsonData 处理
+            emit logMessage(msgStr);
+            continue; // 跳过当前循环，不将数据追加到 JSON 缓存中
+        }
+        
         // 由于UDP通常是完整的数据包，我们将其追加到缓存中进行统一处理
         m_serialBuffer.append(datagram);
     }
