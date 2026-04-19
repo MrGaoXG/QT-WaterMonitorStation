@@ -277,7 +277,7 @@ Window {
             }
             HudPanel {
                 title: "核心指标监控"
-                warning: systemData.phValue > 8.0 // 逻辑触发：PH值过高时面板报警
+                warning: systemData.phValue < 6.0 || systemData.phValue > 9.0 || systemData.dissolvedOxygen < 4.0 || systemData.turbidity > 10.0
                 Layout.fillWidth: true; Layout.fillHeight: true
                 
                 ColumnLayout {
@@ -294,7 +294,17 @@ Window {
                             RowLayout {
                                 Layout.fillWidth: true; Text { text: modelData.name; color: "white"; font.family: customFont.name; Layout.preferredWidth: 120; font.pixelSize: 24 } // 100 -> 120, 22 -> 24
                                 Rectangle { Layout.fillWidth: true; height: 24; color: "#2000FFFF" // 20 -> 24
-                                    Rectangle { width: parent.width * modelData.val; height: parent.height; color: systemData.phValue > 8 && index == 0 ? "red" : "#00FFFF"; Behavior on width { NumberAnimation{duration:1000} } }
+                                    Rectangle { 
+                                        width: parent.width * modelData.val; 
+                                        height: parent.height; 
+                                        color: {
+                                            if (index === 0) return (systemData.phValue < 6.0 || systemData.phValue > 9.0) ? "red" : "#00FFFF";
+                                            if (index === 1) return (systemData.dissolvedOxygen < 4.0) ? "red" : "#00FFFF";
+                                            if (index === 2) return (systemData.turbidity > 10.0) ? "red" : "#00FFFF";
+                                            return "#00FFFF";
+                                        }
+                                        Behavior on width { NumberAnimation{duration:1000} } 
+                                    }
                                 }
                                 Text { text: modelData.txt; color: "#00FFFF"; font.family: customFont.name; Layout.preferredWidth: 100; font.pixelSize: 24 } // 80 -> 100, 22 -> 24
                             }
@@ -433,13 +443,14 @@ Window {
                     // 无人机蓝点
                     Rectangle {
                         id: dronePoint
-                        width: 10; height: 10; radius: 5
+                        width: 16; height: 16; radius: 8 // 10 -> 16
                         color: "#0088FF"
                         x: parent.width * 0.7; y: parent.height * 0.3
                         visible: systemData.droneRunning
                         
                         MouseArea {
-                            anchors.fill: parent
+                            anchors.centerIn: parent
+                            width: 60; height: 60 // 增加不可见的巨大触摸热区
                             hoverEnabled: true
                             onClicked: {
                                 var lat = (30.5 + Math.random() * 0.1).toFixed(4)
@@ -459,13 +470,14 @@ Window {
                     // 无人船红点
                     Rectangle {
                         id: shipPoint
-                        width: 10; height: 10; radius: 5
+                        width: 16; height: 16; radius: 8 // 10 -> 16
                         color: "#FF0000"
                         x: parent.width * 0.3; y: parent.height * 0.6
                         visible: systemData.shipRunning
                         
                         MouseArea {
-                            anchors.fill: parent
+                            anchors.centerIn: parent
+                            width: 60; height: 60 // 增加不可见的巨大触摸热区
                             hoverEnabled: true
                             onClicked: {
                                 var lat = (30.4 + Math.random() * 0.1).toFixed(4)
@@ -516,8 +528,8 @@ Window {
                             Text { text: systemData.droneTelemetry.altitude + " m"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 36 } // 28 -> 36
                             Text { text: "速度 SPD:"; color: "#00A8FF"; font.pixelSize: 24 }
                             Text { text: systemData.droneTelemetry.speed + " m/s"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 36 }
-                            Text { text: "信号 SIG:"; color: "#00A8FF"; font.pixelSize: 24 }
-                            Text { text: systemData.droneTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 36 }
+                            Text { text: "电量 BAT:"; color: "#00A8FF"; font.pixelSize: 24 }
+                            Text { text: systemData.droneTelemetry.battery + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 36 }
                         }
                     }
                     
@@ -534,8 +546,8 @@ Window {
                             Text { text: systemData.shipTelemetry.speed + " kn"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 36 } // 28 -> 36
                             Text { text: "航向 HDG:"; color: "#00A8FF"; font.pixelSize: 24 }
                             Text { text: systemData.shipTelemetry.heading + " °"; color: "#00FFFF"; font.family: customFont.name; font.pixelSize: 36 }
-                            Text { text: "通信 SIG:"; color: "#00A8FF"; font.pixelSize: 24 }
-                            Text { text: systemData.shipTelemetry.signal + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 36 }
+                            Text { text: "电量 BAT:"; color: "#00A8FF"; font.pixelSize: 24 }
+                            Text { text: systemData.shipTelemetry.battery + "%"; color: "#00FF00"; font.family: customFont.name; font.pixelSize: 36 }
                         }
                     }
                 }
@@ -920,19 +932,19 @@ Window {
             function sendToAI(msg) {
                 if (!msg || msg.trim() === "") return;
                 
-                // 1. 将用户消息添加到聊天模型中，显示在界面上
-                chatModel.append({ "text": msg.trim(), "isUser": true });
-                
-                // 2. 调用后端 C++ 接口发送 UDP 请求
+                // 1. 调用后端 C++ 接口发送 UDP 请求
+                // （由于后端 Python 收到请求后会通过 UDP 回发一条带有 [AI咨询] 前缀的消息，
+                // QML 层的 onLogMessage 槽函数会自动捕捉并把问题追加到界面上，
+                // 因此这里不需要手动 append 用户问题，否则会产生重复气泡）
                 systemData.askAI(msg.trim());
                 
-                // 3. 清空输入框
+                // 2. 清空输入框
                 chatInput.text = ""; 
                 
-                // 4. 添加一个 AI 正在思考的占位符
+                // 3. 添加一个 AI 正在思考的占位符
                 chatModel.append({ "text": "正在思考分析中...", "isUser": false });
                 
-                // 5. 滚动到底部
+                // 4. 滚动到底部
                 chatListView.positionViewAtEnd();
             }
 
@@ -1055,13 +1067,21 @@ Window {
             Connections {
                 target: systemData
                 function onLogMessage(msg) {
-                    if (msg.indexOf("[AI诊断回复]") !== -1) {
+                    if (msg.indexOf("[AI咨询]") !== -1) {
+                        var question = msg.replace("[AI咨询] ", "");
+                        chatModel.append({ "text": question, "isUser": true });
+                        // 4. 添加一个 AI 正在思考的占位符
+                        chatModel.append({ "text": "正在思考分析中...", "isUser": false });
+                        chatListView.positionViewAtEnd();
+                    }
+                    else if (msg.indexOf("[AI诊断回复]") !== -1) {
                         // 移除占位
                         if (chatModel.count > 0 && chatModel.get(chatModel.count-1).text === "正在思考分析中...") {
                             chatModel.remove(chatModel.count-1);
                         }
                         var reply = msg.replace("[AI诊断回复] ", "");
                         chatModel.append({ "text": reply, "isUser": false });
+                        chatListView.positionViewAtEnd();
                     }
                 }
             }

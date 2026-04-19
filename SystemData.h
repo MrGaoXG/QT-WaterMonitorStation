@@ -172,6 +172,8 @@ private:
     bool m_hasAlarm;
     bool m_alarmAcknowledged;
     QString m_currentAlarmMsg;
+    
+    bool m_isExternalDataReceived; // 标志是否收到真实的外部数据
 
     QTimer *m_timer; // 用于定时模拟数据更新
     QSerialPort *m_serialPort; // 串口对象

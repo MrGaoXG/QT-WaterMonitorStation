@@ -181,37 +181,47 @@ Item {
             // 将坐标定位到图片中央偏上的大坝厂房位置
             x: bgImage.width * 0.5; y: bgImage.height * 0.4
             
-            // 跳动的小光点指示器
+            // 跳动的小光点指示器 (增大尺寸，方便 7 寸屏触摸)
             Rectangle {
                 id: dot
-                width: 16; height: 16; radius: 8; color: "#00ffff"
+                width: 32; height: 32; radius: 16; color: "#00ffff" // 原来是 16x16
                 SequentialAnimation on scale { 
                     loops: Animation.Infinite
                     NumberAnimation { from: 0.8; to: 1.3; duration: 800 }
                     NumberAnimation { from: 1.3; to: 0.8; duration: 800 } 
                 }
-                // 外圈光晕
+                // 外圈光晕 (相应增大)
                 Rectangle {
-                    anchors.centerIn: parent; width: 24; height: 24; radius: 12; color: "transparent"; border.color: "#00ffff"; border.width: 1
+                    anchors.centerIn: parent; width: 48; height: 48; radius: 24; color: "transparent"; border.color: "#00ffff"; border.width: 2 // 原来是 24x24
+                }
+                
+                // 增加一个透明的鼠标/触摸区域，比光点更大，确保极其容易点中
+                MouseArea {
+                    anchors.centerIn: parent
+                    width: 80; height: 80 // 巨大的触摸响应区
+                    onClicked: {
+                        console.log("大坝坐标点被点击")
+                        // 这里可以添加点击后的弹窗或交互逻辑
+                    }
                 }
             }
             
-            // 悬浮数据框
+            // 悬浮数据框 (适当增大文字和框体，适应小屏幕阅读)
             Rectangle {
                 anchors.bottom: dot.top; anchors.bottomMargin: 20; anchors.horizontalCenter: dot.horizontalCenter
-                width: 140; height: 70; color: Qt.rgba(0, 30/255, 60/255, 0.85); border.color: "#00ffff"; radius: 4
+                width: 180; height: 80; color: Qt.rgba(0, 30/255, 60/255, 0.85); border.color: "#00ffff"; radius: 4 // 框体增大
                 // 科技感小角标
-                Rectangle { width: 8; height: 8; color: "#00ffff"; anchors.top: parent.top; anchors.left: parent.left }
+                Rectangle { width: 10; height: 10; color: "#00ffff"; anchors.top: parent.top; anchors.left: parent.left }
                 
                 Column {
                     anchors.centerIn: parent; spacing: 8
-                    Text { text: "1号水轮发电机组"; color: "#aaddff"; font.pixelSize: 12; font.family: customFont.name }
-                    Text { text: "瞬时流速: 45 m³/s"; color: "#00ffff"; font.pixelSize: 15; font.bold: true; font.family: customFont.name }
+                    Text { text: "1号水轮发电机组"; color: "#aaddff"; font.pixelSize: 16; font.family: customFont.name } // 字号增大
+                    Text { text: "瞬时流速: 45 m³/s"; color: "#00ffff"; font.pixelSize: 18; font.bold: true; font.family: customFont.name } // 字号增大
                 }
             }
             
             // 连接线
-            Rectangle { width: 2; height: 20; color: "#00ffff"; anchors.bottom: dot.top; anchors.horizontalCenter: dot.horizontalCenter }
+            Rectangle { width: 3; height: 20; color: "#00ffff"; anchors.bottom: dot.top; anchors.horizontalCenter: dot.horizontalCenter }
         }
     }
 }

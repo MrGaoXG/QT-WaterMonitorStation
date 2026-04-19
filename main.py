@@ -77,7 +77,8 @@ except ImportError:
 
 class SerialUDPBridge:
     """串口与UDP双向桥接服务"""
-    def __init__(self, serial_port='/dev/ttyS0', baud_rate=9600, udp_send_port=8080, udp_recv_port=8081):
+    def __init__(self, ai_analyst=None, serial_port='/dev/ttyS0', baud_rate=9600, udp_send_port=8080, udp_recv_port=8081):
+        self.ai_analyst = ai_analyst
         self.serial_port = serial_port
         self.baud_rate = baud_rate
         self.udp_send_port = udp_send_port
@@ -120,16 +121,30 @@ class SerialUDPBridge:
         print(f"✓ 串口<->UDP桥接已启动: 串口({self.serial_port}) <-> UDP广播({self.udp_send_port}) / 监听({self.udp_recv_port})")
         
     def _serial_to_udp_loop(self):
-        """读取串口数据 -> 广播到UDP(8080)"""
+        """读取串口数据 -> 进行异常检查 -> 广播到UDP(8080) 给 Qt 界面"""
         while self.running:
             try:
                 if self.ser.in_waiting:
                     data = self.ser.readline()
                     if data:
                         # 打印从串口收到的数据作为调试信息
-                        print(f"[串口->UDP] 收到串口数据: {data.strip().decode('utf-8', errors='ignore')}")
+                        try:
+                            decoded_data = data.strip().decode('utf-8', errors='ignore')
+                            print(f"[串口->UDP] 收到串口数据: {decoded_data}")
+                            
+                            # --- 核心逻辑：直接在串口接收层进行 JSON 解析和异常检查 ---
+                            if self.ai_analyst:
+                                try:
+                                    json_data = json.loads(decoded_data)
+                                    # 调用 AI 分析引擎的异常检查方法
+                                    self.ai_analyst._check_for_anomalies(json_data)
+                                except json.JSONDecodeError:
+                                    pass # 忽略非 JSON 数据
+                                    
+                        except Exception as e:
+                            print(f"[串口->UDP] 数据处理异常: {e}")
                         
-                        # 改为 255.255.255.255 真正的广播地址，确保 Qt 和 Python 的 8080 端口都能收到
+                        # 无论是否有异常，都必须将原始数据广播给 Qt 界面 (255.255.255.255:8080)
                         self.send_sock.sendto(data, ('255.255.255.255', self.udp_send_port))
             except Exception as e:
                 pass
@@ -176,8 +191,9 @@ class AIDataAnalyst:
                 try:
                     self.llm = Llama(
                         model_path=model_path,
-                        n_threads=4,      # 针对 ARM 多核优化
-                        n_ctx=2048,       # 上下文窗口限制
+                        n_threads=4,      # 针对 ARM 多核优化，树莓派通常是4核
+                        n_ctx=512,        # 缩小上下文窗口限制(从2048降到512)，大幅减少内存占用和计算量
+                        n_batch=256,      # 增加批处理大小，加速 Prompt 的初始处理(Prompt Ingestion)速度
                         verbose=False     # 关闭 C++ 底层冗余日志
                     )
                     print("✅ [边缘 AI] 本地模型加载成功！内存映射(mmap)完成。")
@@ -189,6 +205,7 @@ class AIDataAnalyst:
                 
         # --- 新增：初始化 TTS 引擎 ---
         self.tts_engine = None
+        self.is_tts_playing = False  # 新增：用于标记当前是否正在播放音频
         if HAS_PYTTSX3:
             # 改用 edge-tts
             self.tts_engine = True  # 仅作标志位
@@ -198,6 +215,11 @@ class AIDataAnalyst:
         self.stt_stream = None
         self.stt_recognizer = None
         self.pyaudio_instance = None
+        
+        # --- 新增：异常告警冷却机制 ---
+        self.last_alert_time = 0
+        self.alert_cooldown = 60  # 相同异常告警间隔(秒)
+        
         if HAS_VOSK:
             model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model")
             if os.path.exists(model_path):
@@ -237,30 +259,76 @@ class AIDataAnalyst:
         print(f"✓ AI 数据分析引擎已启动: 监听端口({self.udp_listen_port})")
 
     def _stt_listener(self):
-        """后台持续监听麦克风语音输入"""
-        print("🎤 [STT] 开始持续监听语音输入...")
+        """后台持续监听麦克风语音输入 (带唤醒词)"""
+        print("🎤 [STT] 开始持续监听语音输入 (唤醒词: 小俊)...")
+        
+        is_awake = False
+        awake_timeout = 0
+        wake_words = ["小高", "小膏", "小糕"]
+        
         while self.running:
             try:
+                # 如果正在进行 TTS 播放，则清空缓冲区并跳过处理，防止喇叭声音被麦克风录入（回声/自激）
+                if getattr(self, 'is_tts_playing', False):
+                    # 持续读取但不处理，避免缓冲区溢出
+                    self.stt_stream.read(4000, exception_on_overflow=False)
+                    # 播放时保持唤醒状态不超时，以便播放结束后可以直接下达指令
+                    if is_awake:
+                        awake_timeout = time.time() + 15
+                    continue
+
                 # 每次读取 4000 帧音频数据，不抛出溢出异常
                 data = self.stt_stream.read(4000, exception_on_overflow=False)
                 if len(data) == 0:
                     continue
                 
+                # 检查唤醒是否超时
+                if is_awake and time.time() > awake_timeout:
+                    print("💤 [STT] 唤醒超时，重新进入休眠状态等待唤醒。")
+                    is_awake = False
+                
                 if self.stt_recognizer.AcceptWaveform(data):
                     result = json.loads(self.stt_recognizer.Result())
                     text = result.get("text", "").replace(" ", "")
-                    if text:
-                        print(f"\n🗣️ [语音输入] >> {text}")
-                        # 直接复用原有的 process_ai_query 流程，把语音识别的文本喂给 LLM
+                    if not text:
+                        continue
+                        
+                    print(f"\n🗣️ [语音输入] >> {text}")
+                    
+                    if not is_awake:
+                        # 休眠状态下，检测唤醒词
+                        for w in wake_words:
+                            if w in text:
+                                is_awake = True
+                                awake_timeout = time.time() + 15 # 保持唤醒 15 秒
+                                print(f"🌟 [STT] 已唤醒 (匹配到 '{w}')！等待指令...")
+                                
+                                # 切分出唤醒词后面的指令内容
+                                cmd_text = text.split(w, 1)[1]
+                                if len(cmd_text) >= 2:
+                                    # 如果跟着说了具体的指令，直接处理
+                                    print(f"🌟 [STT] 提取到随附指令: {cmd_text}")
+                                    self.process_ai_query(cmd_text)
+                                    is_awake = False # 处理完毕重置休眠
+                                else:
+                                    # 只是喊了唤醒词，回复“我在”并等待下一句
+                                    self._send_ai_reply("我在，请问有什么可以帮您？")
+                                break
+                    else:
+                        # 已唤醒状态，将识别到的文本作为指令直接处理
+                        print(f"🌟 [STT] 收到执行指令: {text}")
                         self.process_ai_query(text)
+                        is_awake = False # 处理一次指令后，默认重新休眠，需要再次唤醒
+                        
             except Exception as e:
                 # 简单忽略偶发的音频流读取异常，防止线程崩溃
                 pass
         print("🎤 [STT] 语音监听线程已退出。")
 
     def _data_listener(self):
-        """监听 8080 端口，获取 Qt 正在显示的数据广播"""
-        # 注意：这里需要一个新的 socket 来监听广播数据
+        """这个方法可以保留用于监听其他通过UDP直接发送过来的数据（不经过串口），
+           由于主要逻辑已经转移到 SerialUDPBridge，这里我们仅做备用的状态同步。
+        """
         data_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         data_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         data_sock.bind(('0.0.0.0', self.udp_listen_port))
@@ -273,7 +341,7 @@ class AIDataAnalyst:
                 try:
                     raw_json = data.decode('utf-8', errors='ignore')
                     # 简单过滤，确保是传感器数据包
-                    if "ph" in raw_json or "bat" in raw_json:
+                    if "ph" in raw_json or "bat" in raw_json or "drone" in raw_json or "ship" in raw_json:
                         self.latest_data = json.loads(raw_json)
                 except:
                     continue
@@ -282,6 +350,54 @@ class AIDataAnalyst:
             except Exception as e:
                 print(f"AI数据监听异常: {e}")
         data_sock.close()
+
+    def _check_for_anomalies(self, data):
+        """轻量级规则异常监测，如果异常且不在冷却期，触发大模型分析"""
+        ph_val = data.get("ph") or data.get("PH")
+        
+        # 兼容 Qt 期望的嵌套格式 (drone/ship) 以及扁平格式
+        bat_val = data.get("bat") or data.get("battery") or data.get("BAT")
+        if bat_val is None:
+            for key in ["drone", "UVA_telemetry", "ship", "USV_telemetry"]:
+                if key in data and isinstance(data[key], dict):
+                    nested_bat = data[key].get("bat") or data[key].get("battery")
+                    if nested_bat is not None:
+                        bat_val = nested_bat
+                        break
+        
+        anomalies = []
+        if ph_val is not None:
+            try:
+                ph = float(ph_val)
+                if ph < 6.0 or ph > 9.0:
+                    anomalies.append(f"水质PH值异常({ph})")
+            except:
+                pass
+                
+        if bat_val is not None:
+            try:
+                bat = float(bat_val)
+                if bat < 20.0:
+                    anomalies.append(f"设备电量过低({bat}%)")
+            except:
+                pass
+                
+        if anomalies:
+            current_time = time.time()
+            # 如果不在冷却期内，则触发 AI 告警
+            if current_time - self.last_alert_time > self.alert_cooldown:
+                self.last_alert_time = current_time
+                anomaly_str = "，".join(anomalies)
+                print(f"\n⚠️ [系统预警] 发现异常数据: {anomaly_str}，正在触发 AI 分析与播报...")
+                
+                # 构造紧急情况下的 Prompt
+                alert_prompt = (
+                    f"紧急情况！系统检测到以下异常：{anomaly_str}。完整传感器数据为：{json.dumps(data, ensure_ascii=False)}。"
+                    f"请简短地分析可能的原因，并给出应急处理建议。要求语气紧急，字数在100字以内，最后要求用户尽快处理。"
+                )
+                
+                # 直接交由 AI 引擎进行推理和语音播报
+                self.process_ai_query(alert_prompt)
 
     def _command_listener(self):
         """监听来自 Qt 的 AI 提问指令 (假定使用特定前缀或单独端口，这里复用 8081 进行接收)"""
@@ -322,8 +438,8 @@ class AIDataAnalyst:
                     {'role': 'system', 'content': system_context},
                     {'role': 'user', 'content': query_text},
                 ],
-                max_tokens=256,
-                temperature=0.7
+                max_tokens=50, # 强制模型最多只生成50个token，极大加快生成速度
+                temperature=0.3 # 降低随机性，直接输出核心内容
             )
             ans = response['choices'][0]['message']['content'].strip()
             cost_time = time.time() - start_time
@@ -364,6 +480,9 @@ class AIDataAnalyst:
         if not self.tts_engine:
             return
             
+        # 开始播放前，设置标志位，阻塞 STT 监听
+        self.is_tts_playing = True
+            
         async def synthesize_and_play(text):
             voice_name = "zh-CN-XiaoxiaoNeural"
             output_mp3 = "main_tts_output.mp3"
@@ -386,7 +505,7 @@ class AIDataAnalyst:
                 # 3. 使用 aplay 直接播放到 USB 声卡 (阻塞式播放，直到播放完毕)
                 print("🔊 [TTS] 正在通过喇叭播报...")
                 subprocess.run(
-                    ['aplay', '-D', 'plughw:3,0', '-q', output_wav],
+                    ['aplay', '-D', 'plughw:4,0', '-q', output_wav],
                     check=False
                 )
                 print("🔊 [TTS] 播报完毕。")
@@ -394,18 +513,24 @@ class AIDataAnalyst:
             except Exception as e:
                 print(f"⚠️ [TTS] 语音合成或播放失败: {e}")
             finally:
-                # 4. 清理临时文件
+                # 4. 清理临时文件并重置播放状态
                 for f in [output_mp3, output_wav]:
                     if os.path.exists(f):
                         try:
                             os.remove(f)
                         except:
                             pass
+                
+                # 播放完毕后，稍微等待一点时间让尾音彻底消失，然后重置标志位
+                time.sleep(0.5)
+                self.is_tts_playing = False
+                print("🎤 [STT] 喇叭播放结束，麦克风恢复收音。")
 
         try:
             asyncio.run(synthesize_and_play(text))
         except Exception as e:
             print(f"⚠️ [TTS] 播放线程异常: {e}")
+            self.is_tts_playing = False
 
     def stop(self):
         self.running = False
@@ -485,8 +610,8 @@ class SensorSystem:
         
         self.logger.info("系统初始化完成!\n")
         
-        # --- 新增：启动串口与UDP桥接服务 ---
-        self.bridge = SerialUDPBridge(serial_port='/dev/ttyS0', baud_rate=9600)
+        # --- 新增：启动串口与UDP桥接服务，并传入 ai_analyst 实例进行异常监测 ---
+        self.bridge = SerialUDPBridge(ai_analyst=self.ai_analyst, serial_port='/dev/ttyS0', baud_rate=9600, udp_send_port=8080)
         self.bridge.start()
         
         # 启动 AI 交互监听线程
@@ -501,12 +626,14 @@ class SensorSystem:
         
         # 用于将 AI 回复发回给 Qt 的 socket (发送到 8080，让 Qt 的日志栏收到)
         resp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        resp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1) # 开启广播权限，防止部分系统无法发往 255.255.255.255
         
         while self.running:
             try:
                 data, addr = ai_sock.recvfrom(2048)
                 query = data.decode('utf-8', errors='ignore').strip()
                 if query:
+                    print(f"📡 [UDP 8082] 收到来自 Qt 的 AI 咨询请求: {query}") # 增加调试日志
                     # 调用 AI 引擎分析 (现在是异步非阻塞的，内部会处理回调发送)
                     self.ai_analyst.process_ai_query(query)
             except socket.timeout:

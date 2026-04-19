@@ -162,16 +162,33 @@ Item {
             ctx.shadowBlur = 10;
             ctx.stroke();
             
-            // 中心发光点
+            // 中心发光点 (增大中心圆点，方便点击或视觉识别)
             ctx.beginPath();
-            ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
+            ctx.arc(cx, cy, 6, 0, 2 * Math.PI); // 原来是 3
             ctx.fillStyle = "#FFFFFF";
             ctx.fill();
+            
+            // 给中心点增加外圈光晕
+            ctx.beginPath();
+            ctx.arc(cx, cy, 12, 0, 2 * Math.PI);
+            ctx.strokeStyle = "rgba(0, 255, 255, 0.8)";
+            ctx.lineWidth = 2;
+            ctx.stroke();
         }
         
         // 只有大小改变时才需要重绘
         onWidthChanged: requestPaint()
         onHeightChanged: requestPaint()
         Component.onCompleted: requestPaint()
+    }
+    
+    // 在雷达中心增加一个隐形的极大触摸区域，专门适配 7 寸屏
+    MouseArea {
+        anchors.centerIn: parent
+        width: 80; height: 80 // 巨大的触摸响应区
+        onClicked: {
+            console.log("雷达中心被点击")
+            // 可以在这里添加雷达被点击后的放大、切换目标等逻辑
+        }
     }
 }
